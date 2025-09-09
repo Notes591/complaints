@@ -1,12 +1,12 @@
 import streamlit as st
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-from pydrive.auth import GoogleAuth
-from pydrive.drive import GoogleDrive
-from datetime import datetime
+from pydrive2.auth import GoogleAuth
+from pydrive2.drive import GoogleDrive
 import tempfile
+from datetime import datetime
 
-# ====== الاتصال بجوجل شيت ======
+# ====== إعداد Google Sheets ======
 scope = ["https://www.googleapis.com/auth/spreadsheets",
          "https://www.googleapis.com/auth/drive"]
 
@@ -14,127 +14,68 @@ creds_dict = st.secrets["gcp_service_account"]
 creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
 client = gspread.authorize(creds)
 
-# أوراق جوجل شيت
 SHEET_NAME = "Complaints"
-complaints_sheet = client.open(SHEET_NAME).worksheet("Complaints")
-archive_sheet = client.open(SHEET_NAME).worksheet("Archive")
-types_sheet = client.open(SHEET_NAME).worksheet("Types")
+sheet = client.open(SHEET_NAME).sheet1
 
-# ====== Google Drive ======
+# ====== إعداد Google Drive ======
 gauth = GoogleAuth()
 gauth.credentials = creds
 drive = GoogleDrive(gauth)
 
-# ID المجلد اللي هيتخزن فيه الصور
+# ضع هنا Folder ID بتاع Google Drive
 FOLDER_ID = "1vKqFnvsenuzytMhR4cnz4plenAkIY9yw"
 
 # ====== واجهة التطبيق ======
 st.set_page_config(page_title="📢 نظام الشكاوى", page_icon="⚠️")
 st.title("⚠️ نظام إدارة الشكاوى")
 
-# تحميل الأنواع من Google Sheet
-types_list = [row[0] for row in types_sheet.get_all_values()[1:]]
-
-# ====== 1. تسجيل شكوى جديدة ======
-st.header("➕ تسجيل شكوى جديدة")
-
-with st.form("add_complaint", clear_on_submit=True):
+# ====== إضافة شكوى ======
+with st.form("add_complaint"):
     comp_id = st.text_input("🆔 رقم الشكوى")
-    comp_type = st.selectbox("📌 نوع الشكوى", ["اختر نوع الشكوى..."] + types_list, index=0)
+    comp_type = st.text_input("📌 نوع الشكوى")
     action = st.text_area("✅ الإجراء المتخذ")
-    uploaded_file = st.file_uploader("📷 ارفع صورة للشكوى", type=["jpg", "jpeg", "png"])
+    file = st.file_uploader("📎 ارفق صورة / ملف", type=["png", "jpg", "jpeg", "pdf"])
 
     submitted = st.form_submit_button("➕ إضافة شكوى")
-    if submitted:
-        if comp_id.strip() and comp_type != "اختر نوع الشكوى...":
-            complaints = complaints_sheet.get_all_records()
-            archive = archive_sheet.get_all_records()
-            active_ids = [str(c["ID"]) for c in complaints]
-            archived_ids = [str(a["ID"]) for a in archive]
+    if submitted and comp_id.strip():
+        date_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        file_link = ""
 
-            if comp_id in active_ids:
-                st.error("⚠️ رقم الشكوى موجود بالفعل في الشكاوى النشطة")
+        # رفع الملف لو موجود
+        if file is not None:
+            with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
+                tmp_file.write(file.getbuffer())
+                tmp_file_path = tmp_file.name
 
-            else:
-                date_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                image_link = ""
+            gfile = drive.CreateFile({
+                "parents": [{"id": FOLDER_ID}],
+                "title": file.name
+            })
+            gfile.SetContentFile(tmp_file_path)
+            gfile.Upload()
 
-                # رفع الصورة لو موجودة
-                if uploaded_file:
-                    with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
-                        tmp_file.write(uploaded_file.getbuffer())
-                        file_drive = drive.CreateFile({
-                            "title": uploaded_file.name,
-                            "parents": [{"id": FOLDER_ID}]
-                        })
-                        file_drive.SetContentFile(tmp_file.name)
-                        file_drive.Upload()
-                        file_drive.InsertPermission({
-                            "type": "anyone",
-                            "value": "anyone",
-                            "role": "reader"
-                        })
-                        image_link = f"https://drive.google.com/uc?id={file_drive['id']}"
+            # رابط الملف بعد الرفع
+            file_link = f"https://drive.google.com/file/d/{gfile['id']}/view"
 
-                # إضافة الشكوى
-                complaints_sheet.append_row([comp_id, comp_type, action, date_now, image_link])
-                st.success("✅ تم تسجيل الشكوى")
-                st.rerun()
-        else:
-            st.error("⚠️ لازم تدخل رقم شكوى وتختار نوع")
+        # تسجيل البيانات في Google Sheet
+        sheet.append_row([comp_id, comp_type, action, date_now, file_link])
+        st.success("✅ تم تسجيل الشكوى")
 
-# ====== 2. عرض الشكاوى النشطة ======
-st.header("📋 الشكاوى النشطة:")
+# ====== عرض الشكاوى ======
+st.subheader("📋 كل الشكاوى:")
 
-notes = complaints_sheet.get_all_values()
-if len(notes) > 1:
-    for i, row in enumerate(notes[1:], start=2):
-        comp_id, comp_type, action, date_added, image_link = row[:5]
+rows = sheet.get_all_values()
+
+if len(rows) > 1:
+    for i, row in enumerate(rows[1:], start=2):
+        comp_id, comp_type, action, date_added, file_link = row + [""] * (5 - len(row))
 
         with st.expander(f"🆔 شكوى رقم {comp_id}"):
             st.write(f"📌 النوع: {comp_type}")
             st.write(f"✅ الإجراء: {action}")
             st.caption(f"📅 تاريخ التسجيل: {date_added}")
 
-            # عرض الصورة إن وجدت
-            if image_link:
-                st.image(image_link, caption="📷 صورة الشكوى", use_column_width=True)
-                st.markdown(f"[🔗 فتح الصورة في Google Drive]({image_link})")
-
-            new_action = st.text_area("✏️ عدل الإجراء", value=action, key=f"act_{i}")
-            col1, col2, col3 = st.columns(3)
-
-            if col1.button("💾 حفظ", key=f"save_{i}"):
-                complaints_sheet.update(f"C{i}", [[new_action]])
-                st.success("✅ تم تعديل الشكوى")
-                st.rerun()
-
-            if col2.button("🗑️ حذف", key=f"delete_{i}"):
-                complaints_sheet.delete_rows(i)
-                st.warning("🗑️ تم حذف الشكوى")
-                st.rerun()
-
-            if col3.button("📦 أرشفة", key=f"archive_{i}"):
-                archive_sheet.append_row([comp_id, comp_type, new_action, date_added, image_link])
-                complaints_sheet.delete_rows(i)
-                st.success("♻️ الشكوى انتقلت للأرشيف")
-                st.rerun()
+            if file_link:
+                st.markdown(f"📎 [رابط المرفق]({file_link})")
 else:
-    st.info("لا توجد شكاوى حالياً.")
-
-# ====== 3. عرض الأرشيف ======
-st.header("📦 الأرشيف (الشكاوى المحلولة):")
-
-archived = archive_sheet.get_all_values()
-if len(archived) > 1:
-    for row in archived[1:]:
-        comp_id, comp_type, action, date_added, image_link = row[:5]
-        with st.expander(f"📦 شكوى رقم {comp_id}"):
-            st.write(f"📌 النوع: {comp_type}")
-            st.write(f"✅ الإجراء: {action}")
-            st.caption(f"📅 تاريخ التسجيل: {date_added}")
-            if image_link:
-                st.image(image_link, caption="📷 صورة الشكوى", use_column_width=True)
-                st.markdown(f"[🔗 فتح الصورة في Google Drive]({image_link})")
-else:
-    st.info("لا يوجد شكاوى في الأرشيف.")
+    st.info("لا توجد شكاوى حتى الآن.")
