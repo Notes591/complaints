@@ -2,9 +2,6 @@ import streamlit as st
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload
-import io
 
 # ====== الاتصال بجوجل شيت ======
 scope = ["https://www.googleapis.com/auth/spreadsheets",
@@ -14,17 +11,12 @@ creds_dict = st.secrets["gcp_service_account"]
 creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
 client = gspread.authorize(creds)
 
-# Google Drive API
-drive_service = build("drive", "v3", credentials=creds)
-
-# ✅ ID الفولدر اللي هيتخزن فيه الصور (مظبوط دلوقتي)
-FOLDER_ID = "1vKqFnvsenuzytMhR4cnz4plenAkIY9yw"
-
 # أوراق جوجل شيت
 SHEET_NAME = "Complaints"
 complaints_sheet = client.open(SHEET_NAME).worksheet("Complaints")
 archive_sheet = client.open(SHEET_NAME).worksheet("Archive")
 types_sheet = client.open(SHEET_NAME).worksheet("Types")
+aramex_sheet = client.open(SHEET_NAME).worksheet("معلق ارامكس")  # ✅ الورقة الجديدة
 
 # ====== واجهة التطبيق ======
 st.set_page_config(page_title="📢 نظام الشكاوى", page_icon="⚠️")
@@ -50,13 +42,10 @@ if st.button("🔍 بحث"):
                 with st.expander(f"🆔 شكوى رقم {row[0]}"):
                     comp_id, comp_type, action, date_added = row[:4]
                     restored = row[4] if len(row) > 4 else ""
-                    image_url = row[5] if len(row) > 5 else ""
 
                     st.write(f"📌 النوع: {comp_type}")
                     st.write(f"✅ الإجراء: {action}")
                     st.caption(f"📅 تاريخ التسجيل: {date_added}")
-                    if image_url:
-                        st.image(image_url, caption="📷 صورة الشكوى", width=300)
 
                     new_action = st.text_area("✏️ عدل الإجراء", value=action, key=f"search_act_{i}")
                     col1, col2, col3 = st.columns(3)
@@ -72,7 +61,7 @@ if st.button("🔍 بحث"):
                         st.rerun()
 
                     if col3.button("📦 أرشفة", key=f"search_arc_{i}"):
-                        archive_sheet.append_row([comp_id, comp_type, new_action, date_added, restored, image_url])
+                        archive_sheet.append_row([comp_id, comp_type, new_action, date_added, restored])
                         complaints_sheet.delete_rows(i)
                         st.success("♻️ الشكوى اتنقلت للأرشيف")
                         st.rerun()
@@ -84,16 +73,13 @@ if st.button("🔍 بحث"):
                 with st.expander(f"📦 شكوى رقم {row[0]} (في الأرشيف)"):
                     comp_id, comp_type, action, date_added = row[:4]
                     restored = row[4] if len(row) > 4 else ""
-                    image_url = row[5] if len(row) > 5 else ""
 
                     st.write(f"📌 النوع: {comp_type}")
                     st.write(f"✅ الإجراء: {action}")
                     st.caption(f"📅 تاريخ التسجيل: {date_added}")
-                    if image_url:
-                        st.image(image_url, caption="📷 صورة الشكوى", width=300)
 
                     if st.button("♻️ استرجاع", key=f"search_restore_{i}"):
-                        complaints_sheet.append_row([comp_id, comp_type, action, date_added, "🔄 مسترجعة", image_url])
+                        complaints_sheet.append_row([comp_id, comp_type, action, date_added, "🔄 مسترجعة"])
                         archive_sheet.delete_rows(i)
                         st.success("✅ تم استرجاع الشكوى")
                         st.rerun()
@@ -108,7 +94,6 @@ with st.form("add_complaint", clear_on_submit=True):
     comp_id = st.text_input("🆔 رقم الشكوى")
     comp_type = st.selectbox("📌 نوع الشكوى", ["اختر نوع الشكوى..."] + types_list, index=0)
     action = st.text_area("✅ الإجراء المتخذ")
-    uploaded_file = st.file_uploader("📷 إرفاق صورة", type=["png", "jpg", "jpeg"])
 
     submitted = st.form_submit_button("➕ إضافة شكوى")
     if submitted:
@@ -117,36 +102,6 @@ with st.form("add_complaint", clear_on_submit=True):
             archive = archive_sheet.get_all_records()
             active_ids = [str(c["ID"]) for c in complaints]
             archived_ids = [str(a["ID"]) for a in archive]
-            image_url = ""
-
-            # لو فيه صورة مرفوعة نرفعها عالدرايف
-            if uploaded_file is not None:
-                try:
-                    file_stream = io.BytesIO(uploaded_file.read())
-                    mime_type = uploaded_file.type if uploaded_file.type else "application/octet-stream"
-
-                    file_metadata = {"name": uploaded_file.name, "parents": [FOLDER_ID]}
-                    media = MediaIoBaseUpload(file_stream, mimetype=mime_type, resumable=True)
-
-                    file = drive_service.files().create(
-                        body=file_metadata,
-                        media_body=media,
-                        fields="id"
-                    ).execute()
-
-                    file_id = file.get("id")
-
-                    # فتح الملف للكل
-                    drive_service.permissions().create(
-                        fileId=file_id,
-                        body={"role": "reader", "type": "anyone"},
-                    ).execute()
-
-                    image_url = f"https://drive.google.com/uc?id={file_id}"
-
-                except Exception as e:
-                    st.error("❌ حصل خطأ أثناء رفع الملف")
-                    st.exception(e)
 
             if comp_id in active_ids:
                 st.error("⚠️ رقم الشكوى موجود بالفعل في الشكاوى النشطة")
@@ -156,12 +111,12 @@ with st.form("add_complaint", clear_on_submit=True):
                     if row[0] == comp_id:
                         archive_sheet.delete_rows(i)
                         date_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        complaints_sheet.append_row([comp_id, comp_type, action, date_now, "🔄 مسترجعة", image_url])
+                        complaints_sheet.append_row([comp_id, comp_type, action, date_now, "🔄 مسترجعة"])
                         st.success("✅ تم استرجاع الشكوى من الأرشيف وإعادة تفعيلها")
                         st.rerun()
             else:
                 date_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                complaints_sheet.append_row([comp_id, comp_type, action, date_now, "", image_url])
+                complaints_sheet.append_row([comp_id, comp_type, action, date_now, ""])
                 st.success("✅ تم تسجيل الشكوى")
                 st.rerun()
         else:
@@ -175,14 +130,11 @@ if len(notes) > 1:
     for i, row in enumerate(notes[1:], start=2):
         comp_id, comp_type, action, date_added = row[:4]
         restored = row[4] if len(row) > 4 else ""
-        image_url = row[5] if len(row) > 5 else ""
 
         with st.expander(f"🆔 شكوى رقم {comp_id} {restored}"):
             st.write(f"📌 النوع: {comp_type}")
             st.write(f"✅ الإجراء: {action}")
             st.caption(f"📅 تاريخ التسجيل: {date_added}")
-            if image_url:
-                st.image(image_url, caption="📷 صورة الشكوى", width=300)
 
             new_action = st.text_area("✏️ عدل الإجراء", value=action, key=f"act_{i}")
             col1, col2, col3 = st.columns(3)
@@ -198,7 +150,7 @@ if len(notes) > 1:
                 st.rerun()
 
             if col3.button("📦 أرشفة", key=f"archive_{i}"):
-                archive_sheet.append_row([comp_id, comp_type, new_action, date_added, restored, image_url])
+                archive_sheet.append_row([comp_id, comp_type, new_action, date_added, restored])
                 complaints_sheet.delete_rows(i)
                 st.success("♻️ الشكوى انتقلت للأرشيف")
                 st.rerun()
@@ -213,13 +165,40 @@ if len(archived) > 1:
     for row in archived[1:]:
         comp_id, comp_type, action, date_added = row[:4]
         restored = row[4] if len(row) > 4 else ""
-        image_url = row[5] if len(row) > 5 else ""
 
         with st.expander(f"📦 شكوى رقم {comp_id} {restored}"):
             st.write(f"📌 النوع: {comp_type}")
             st.write(f"✅ الإجراء: {action}")
             st.caption(f"📅 تاريخ التسجيل: {date_added}")
-            if image_url:
-                st.image(image_url, caption="📷 صورة الشكوى", width=300)
 else:
     st.info("لا يوجد شكاوى في الأرشيف.")
+
+# ====== 5. معلق ارامكس ======
+st.header("🚚 معلق ارامكس")
+
+with st.form("add_aramex", clear_on_submit=True):
+    order_id = st.text_input("🔢 رقم الطلب")
+    status = st.text_input("📌 الحالة")
+    action = st.text_area("✅ الإجراء المتخذ")
+    submitted = st.form_submit_button("➕ إضافة للجدول")
+    
+    if submitted:
+        if order_id.strip() and status.strip() and action.strip():
+            date_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")  # ✅ أوتوماتيك
+            aramex_sheet.append_row([order_id, status, date_now, action])
+            st.success("✅ تم تسجيل الطلب")
+        else:
+            st.error("⚠️ لازم تدخل رقم الطلب + الحالة + الإجراء")
+
+# عرض الطلبات
+st.subheader("📋 قائمة الطلبات المعلقة")
+aramex_data = aramex_sheet.get_all_values()
+if len(aramex_data) > 1:
+    for row in aramex_data[1:]:
+        order_id, status, date_added, action = row[:4]
+        with st.expander(f"طلب {order_id}"):
+            st.write(f"📌 الحالة: {status}")
+            st.write(f"✅ الإجراء: {action}")
+            st.caption(f"📅 تاريخ الإضافة: {date_added}")
+else:
+    st.info("لا توجد طلبات معلقة حالياً.")
