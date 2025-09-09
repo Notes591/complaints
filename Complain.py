@@ -16,7 +16,8 @@ SHEET_NAME = "Complaints"
 complaints_sheet = client.open(SHEET_NAME).worksheet("Complaints")
 archive_sheet = client.open(SHEET_NAME).worksheet("Archive")
 types_sheet = client.open(SHEET_NAME).worksheet("Types")
-aramex_sheet = client.open(SHEET_NAME).worksheet("معلق ارامكس")  # ✅ الورقة الجديدة
+aramex_sheet = client.open(SHEET_NAME).worksheet("معلق ارامكس")
+aramex_archive = client.open(SHEET_NAME).worksheet("أرشيف أرامكس")
 
 # ====== واجهة التطبيق ======
 st.set_page_config(page_title="📢 نظام الشكاوى", page_icon="⚠️")
@@ -152,7 +153,7 @@ if len(notes) > 1:
             if col3.button("📦 أرشفة", key=f"archive_{i}"):
                 archive_sheet.append_row([comp_id, comp_type, new_action, date_added, restored])
                 complaints_sheet.delete_rows(i)
-                st.success("♻️ الشكوى انتقلت للأرشيف")
+                st.success("♻️ الشكوى انتقلت للأارشيف")
                 st.rerun()
 else:
     st.info("لا توجد شكاوى حالياً.")
@@ -180,13 +181,14 @@ with st.form("add_aramex", clear_on_submit=True):
     order_id = st.text_input("🔢 رقم الطلب")
     status = st.text_input("📌 الحالة")
     action = st.text_area("✅ الإجراء المتخذ")
-    submitted = st.form_submit_button("➕ إضافة للجدول")
+    submitted = st.form_submit_button("➕ إضافة")
     
     if submitted:
         if order_id.strip() and status.strip() and action.strip():
             date_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")  # ✅ أوتوماتيك
             aramex_sheet.append_row([order_id, status, date_now, action])
             st.success("✅ تم تسجيل الطلب")
+            st.rerun()
         else:
             st.error("⚠️ لازم تدخل رقم الطلب + الحالة + الإجراء")
 
@@ -194,11 +196,38 @@ with st.form("add_aramex", clear_on_submit=True):
 st.subheader("📋 قائمة الطلبات المعلقة")
 aramex_data = aramex_sheet.get_all_values()
 if len(aramex_data) > 1:
-    for row in aramex_data[1:]:
+    for i, row in enumerate(aramex_data[1:], start=2):
         order_id, status, date_added, action = row[:4]
+        
         with st.expander(f"طلب {order_id}"):
-            st.write(f"📌 الحالة: {status}")
-            st.write(f"✅ الإجراء: {action}")
+            st.write(f"📌 الحالة الحالية: {status}")
+            st.write(f"✅ الإجراء الحالي: {action}")
             st.caption(f"📅 تاريخ الإضافة: {date_added}")
+            
+            # مدخلات للتعديل
+            new_status = st.text_input("✏️ عدل الحالة", value=status, key=f"status_{i}")
+            new_action = st.text_area("✏️ عدل الإجراء", value=action, key=f"action_{i}")
+            
+            col1, col2, col3 = st.columns(3)
+            
+            # زرار حفظ التعديلات
+            if col1.button("💾 حفظ", key=f"save_aramex_{i}"):
+                aramex_sheet.update(f"B{i}", [[new_status]])
+                aramex_sheet.update(f"D{i}", [[new_action]])
+                st.success("✅ تم تعديل الطلب")
+                st.rerun()
+            
+            # زرار الحذف
+            if col2.button("🗑️ حذف", key=f"delete_aramex_{i}"):
+                aramex_sheet.delete_rows(i)
+                st.warning("🗑️ تم حذف الطلب")
+                st.rerun()
+            
+            # زرار الأرشفة
+            if col3.button("📦 أرشفة", key=f"archive_aramex_{i}"):
+                aramex_archive.append_row([order_id, new_status, date_added, new_action])
+                aramex_sheet.delete_rows(i)
+                st.success("♻️ الطلب اتنقل لأرشيف أرامكس")
+                st.rerun()
 else:
     st.info("لا توجد طلبات معلقة حالياً.")
