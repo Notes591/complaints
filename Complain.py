@@ -1,9 +1,9 @@
 import streamlit as st
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-from pydrive2.auth import GoogleAuth
-from pydrive2.drive import GoogleDrive
-import tempfile
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseUpload
+import io
 from datetime import datetime
 
 # ====== إعداد Google Sheets ======
@@ -17,10 +17,8 @@ client = gspread.authorize(creds)
 SHEET_NAME = "Complaints"
 sheet = client.open(SHEET_NAME).sheet1
 
-# ====== إعداد Google Drive ======
-gauth = GoogleAuth()
-gauth.credentials = creds
-drive = GoogleDrive(gauth)
+# ====== إعداد Google Drive API ======
+drive_service = build("drive", "v3", credentials=creds)
 
 # ضع هنا Folder ID بتاع Google Drive
 FOLDER_ID = "1vKqFnvsenuzytMhR4cnz4plenAkIY9yw"
@@ -43,19 +41,18 @@ with st.form("add_complaint"):
 
         # رفع الملف لو موجود
         if file is not None:
-            with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
-                tmp_file.write(file.getbuffer())
-                tmp_file_path = tmp_file.name
+            file_metadata = {
+                "name": file.name,
+                "parents": [FOLDER_ID]
+            }
+            media = MediaIoBaseUpload(io.BytesIO(file.getbuffer()), mimetype=file.type, resumable=True)
+            uploaded_file = drive_service.files().create(
+                body=file_metadata,
+                media_body=media,
+                fields="id"
+            ).execute()
 
-            gfile = drive.CreateFile({
-                "parents": [{"id": FOLDER_ID}],
-                "title": file.name
-            })
-            gfile.SetContentFile(tmp_file_path)
-            gfile.Upload()
-
-            # رابط الملف بعد الرفع
-            file_link = f"https://drive.google.com/file/d/{gfile['id']}/view"
+            file_link = f"https://drive.google.com/file/d/{uploaded_file.get('id')}/view"
 
         # تسجيل البيانات في Google Sheet
         sheet.append_row([comp_id, comp_type, action, date_now, file_link])
