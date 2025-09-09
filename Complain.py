@@ -17,8 +17,8 @@ client = gspread.authorize(creds)
 # Google Drive API
 drive_service = build("drive", "v3", credentials=creds)
 
-# ID الفولدر اللي هيتخزن فيه الصور
-FOLDER_ID = "1vKqFnvsenuzytMhR4cnz4plenAkIY9yw"
+# ID الفولدر جوة Shared Drive
+FOLDER_ID = "حط-هنا-الـ-Folder-ID-من-Shared-Drive"
 
 # أوراق جوجل شيت
 SHEET_NAME = "Complaints"
@@ -119,36 +119,36 @@ with st.form("add_complaint", clear_on_submit=True):
             archived_ids = [str(a["ID"]) for a in archive]
             image_url = ""
 
-            # لو فيه صورة مرفوعة نرفعها عالدرايف مع Debug
+            # لو فيه صورة مرفوعة نرفعها على Shared Drive
             if uploaded_file is not None:
                 try:
-                    st.info(f"📤 جاري رفع الملف: {uploaded_file.name}")
-                    st.write(f"🔎 النوع (MIME): {uploaded_file.type if uploaded_file.type else 'غير معروف'}")
-                    st.write(f"📂 هيتخزن في الفولدر ID: {FOLDER_ID}")
-
                     file_stream = io.BytesIO(uploaded_file.read())
                     mime_type = uploaded_file.type if uploaded_file.type else "application/octet-stream"
 
-                    file_metadata = {"name": uploaded_file.name, "parents": [FOLDER_ID]}
+                    file_metadata = {
+                        "name": uploaded_file.name,
+                        "parents": [FOLDER_ID]
+                    }
                     media = MediaIoBaseUpload(file_stream, mimetype=mime_type, resumable=True)
 
                     file = drive_service.files().create(
                         body=file_metadata,
                         media_body=media,
-                        fields="id"
+                        fields="id",
+                        supportsAllDrives=True  # 👈 مهم عشان Shared Drive
                     ).execute()
 
                     file_id = file.get("id")
-                    st.success(f"✅ الملف اتخزن في Drive ID: {file_id}")
 
                     # فتح الملف للكل
                     drive_service.permissions().create(
                         fileId=file_id,
                         body={"role": "reader", "type": "anyone"},
+                        supportsAllDrives=True
                     ).execute()
 
                     image_url = f"https://drive.google.com/uc?id={file_id}"
-                    st.success(f"🌐 لينك مباشر: {image_url}")
+                    st.success(f"🌐 الصورة مرفوعة: {image_url}")
 
                 except Exception as e:
                     st.error("❌ حصل خطأ أثناء رفع الملف")
