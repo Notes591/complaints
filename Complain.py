@@ -119,21 +119,45 @@ with st.form("add_complaint", clear_on_submit=True):
             archived_ids = [str(a["ID"]) for a in archive]
             image_url = ""
 
-            # لو فيه صورة مرفوعة نرفعها عالدرايف
+            # لو فيه صورة مرفوعة نرفعها عالدرايف مع Debug
             if uploaded_file is not None:
-                file_stream = io.BytesIO(uploaded_file.read())
-                file_metadata = {"name": uploaded_file.name, "parents": [FOLDER_ID]}
-                media = MediaIoBaseUpload(file_stream, mimetype=uploaded_file.type, resumable=True)
-                file = drive_service.files().create(body=file_metadata, media_body=media, fields="id").execute()
-                file_id = file.get("id")
-                drive_service.permissions().create(fileId=file_id, body={"role": "reader", "type": "anyone"}).execute()
-                image_url = f"https://drive.google.com/uc?id={file_id}"
+                try:
+                    st.info(f"📤 جاري رفع الملف: {uploaded_file.name}")
+                    st.write(f"🔎 النوع (MIME): {uploaded_file.type if uploaded_file.type else 'غير معروف'}")
+                    st.write(f"📂 هيتخزن في الفولدر ID: {FOLDER_ID}")
+
+                    file_stream = io.BytesIO(uploaded_file.read())
+                    mime_type = uploaded_file.type if uploaded_file.type else "application/octet-stream"
+
+                    file_metadata = {"name": uploaded_file.name, "parents": [FOLDER_ID]}
+                    media = MediaIoBaseUpload(file_stream, mimetype=mime_type, resumable=True)
+
+                    file = drive_service.files().create(
+                        body=file_metadata,
+                        media_body=media,
+                        fields="id"
+                    ).execute()
+
+                    file_id = file.get("id")
+                    st.success(f"✅ الملف اتخزن في Drive ID: {file_id}")
+
+                    # فتح الملف للكل
+                    drive_service.permissions().create(
+                        fileId=file_id,
+                        body={"role": "reader", "type": "anyone"},
+                    ).execute()
+
+                    image_url = f"https://drive.google.com/uc?id={file_id}"
+                    st.success(f"🌐 لينك مباشر: {image_url}")
+
+                except Exception as e:
+                    st.error("❌ حصل خطأ أثناء رفع الملف")
+                    st.exception(e)
 
             if comp_id in active_ids:
                 st.error("⚠️ رقم الشكوى موجود بالفعل في الشكاوى النشطة")
 
             elif comp_id in archived_ids:
-                # استرجاع من الأرشيف
                 for i, row in enumerate(archive_sheet.get_all_values()[1:], start=2):
                     if row[0] == comp_id:
                         archive_sheet.delete_rows(i)
@@ -142,7 +166,6 @@ with st.form("add_complaint", clear_on_submit=True):
                         st.success("✅ تم استرجاع الشكوى من الأرشيف وإعادة تفعيلها")
                         st.rerun()
             else:
-                # إضافة جديدة
                 date_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 complaints_sheet.append_row([comp_id, comp_type, action, date_now, "", image_url])
                 st.success("✅ تم تسجيل الشكوى")
