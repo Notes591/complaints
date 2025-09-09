@@ -6,7 +6,7 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 import io
 
-# ====== إعداد Google Sheets ======
+# ====== الاتصال بجوجل شيت ======
 scope = ["https://www.googleapis.com/auth/spreadsheets",
          "https://www.googleapis.com/auth/drive"]
 
@@ -14,124 +14,195 @@ creds_dict = st.secrets["gcp_service_account"]
 creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
 client = gspread.authorize(creds)
 
-# Sheets
-SHEET_COMPLAINTS = "Complaints"    # الشكاوى الحالية
-SHEET_ARCHIVE = "Complaints_Archive"  # الأرشيف
-SHEET_TYPES = "Complaint_Types"   # جدول أنواع الشكاوى
-
-sheet = client.open(SHEET_COMPLAINTS).sheet1
-archive_sheet = client.open(SHEET_ARCHIVE).sheet1
-types_sheet = client.open(SHEET_TYPES).sheet1
-
-# ====== إعداد Google Drive ======
+# Google Drive API
 drive_service = build("drive", "v3", credentials=creds)
-FOLDER_ID = "1vKqFnvsenuzytMhR4cnz4plenAkIY9yw"  # فولدر جوجل درايف
 
+# ID الفولدر اللي هيتخزن فيه الصور
+FOLDER_ID = "1vKqFnvsenuzytMhR4cnz4plenAkIY9yw"
+
+# أوراق جوجل شيت
+SHEET_NAME = "Complaints"
+complaints_sheet = client.open(SHEET_NAME).worksheet("Complaints")
+archive_sheet = client.open(SHEET_NAME).worksheet("Archive")
+types_sheet = client.open(SHEET_NAME).worksheet("Types")
 
 # ====== واجهة التطبيق ======
 st.set_page_config(page_title="📢 نظام الشكاوى", page_icon="⚠️")
 st.title("⚠️ نظام إدارة الشكاوى")
 
+# تحميل الأنواع
+types_list = [row[0] for row in types_sheet.get_all_values()[1:]]
 
-# ====== دالة رفع الملفات إلى Drive ======
-def upload_to_drive(file):
-    file_metadata = {"name": file.name, "parents": [FOLDER_ID]}
-    media = MediaIoBaseUpload(io.BytesIO(file.read()), mimetype=file.type)
-    uploaded = drive_service.files().create(
-        body=file_metadata,
-        media_body=media,
-        fields="id"
-    ).execute()
-    file_id = uploaded.get("id")
-    return f"https://drive.google.com/file/d/{file_id}/view?usp=sharing"
+# ====== 1. البحث ======
+st.header("🔍 البحث عن شكوى")
+search_id = st.text_input("🆔 اكتب رقم الشكوى")
 
+if st.button("🔍 بحث"):
+    if search_id.strip():
+        complaints = complaints_sheet.get_all_values()
+        archive = archive_sheet.get_all_values()
+        found = False
 
-# ====== دالة البحث ======
-def search_complaint(comp_id):
-    complaints = sheet.get_all_values()[1:]
-    archive = archive_sheet.get_all_values()[1:]
+        # بحث في الشكاوى النشطة
+        for i, row in enumerate(complaints[1:], start=2):
+            if row[0] == search_id:
+                found = True
+                with st.expander(f"🆔 شكوى رقم {row[0]}"):
+                    comp_id, comp_type, action, date_added = row[:4]
+                    restored = row[4] if len(row) > 4 else ""
+                    image_url = row[5] if len(row) > 5 else ""
 
-    for i, row in enumerate(complaints, start=2):
-        if row[0] == comp_id:
-            return row, i, "current"
-    for i, row in enumerate(archive, start=2):
-        if row[0] == comp_id:
-            return row, i, "archive"
-    return None, None, None
+                    st.write(f"📌 النوع: {comp_type}")
+                    st.write(f"✅ الإجراء: {action}")
+                    st.caption(f"📅 تاريخ التسجيل: {date_added}")
+                    if image_url:
+                        st.image(image_url, caption="📷 صورة الشكوى", width=300)
 
+                    new_action = st.text_area("✏️ عدل الإجراء", value=action, key=f"search_act_{i}")
+                    col1, col2, col3 = st.columns(3)
 
-# ====== إضافة شكوى ======
-st.subheader("➕ تسجيل شكوى جديدة")
+                    if col1.button("💾 حفظ", key=f"search_save_{i}"):
+                        complaints_sheet.update(f"C{i}", [[new_action]])
+                        st.success("✅ تم تعديل الشكوى")
+                        st.rerun()
 
-types = [t[0] for t in types_sheet.get_all_values()[1:]]  # الأنواع من الشيت
-with st.form("add_complaint"):
+                    if col2.button("🗑️ حذف", key=f"search_del_{i}"):
+                        complaints_sheet.delete_rows(i)
+                        st.warning("🗑️ تم حذف الشكوى")
+                        st.rerun()
+
+                    if col3.button("📦 أرشفة", key=f"search_arc_{i}"):
+                        archive_sheet.append_row([comp_id, comp_type, new_action, date_added, restored, image_url])
+                        complaints_sheet.delete_rows(i)
+                        st.success("♻️ الشكوى اتنقلت للأرشيف")
+                        st.rerun()
+
+        # بحث في الأرشيف
+        for i, row in enumerate(archive[1:], start=2):
+            if row[0] == search_id:
+                found = True
+                with st.expander(f"📦 شكوى رقم {row[0]} (في الأرشيف)"):
+                    comp_id, comp_type, action, date_added = row[:4]
+                    restored = row[4] if len(row) > 4 else ""
+                    image_url = row[5] if len(row) > 5 else ""
+
+                    st.write(f"📌 النوع: {comp_type}")
+                    st.write(f"✅ الإجراء: {action}")
+                    st.caption(f"📅 تاريخ التسجيل: {date_added}")
+                    if image_url:
+                        st.image(image_url, caption="📷 صورة الشكوى", width=300)
+
+                    if st.button("♻️ استرجاع", key=f"search_restore_{i}"):
+                        complaints_sheet.append_row([comp_id, comp_type, action, date_added, "🔄 مسترجعة", image_url])
+                        archive_sheet.delete_rows(i)
+                        st.success("✅ تم استرجاع الشكوى")
+                        st.rerun()
+
+        if not found:
+            st.error("❌ لم يتم العثور على الشكوى")
+
+# ====== 2. تسجيل شكوى جديدة ======
+st.header("➕ تسجيل شكوى جديدة")
+
+with st.form("add_complaint", clear_on_submit=True):
     comp_id = st.text_input("🆔 رقم الشكوى")
-    comp_type = st.selectbox("📌 نوع الشكوى", [""] + types)
+    comp_type = st.selectbox("📌 نوع الشكوى", ["اختر نوع الشكوى..."] + types_list, index=0)
     action = st.text_area("✅ الإجراء المتخذ")
-    uploaded_file = st.file_uploader("📎 إرفاق صورة/ملف", type=["png", "jpg", "jpeg", "pdf"])
+    uploaded_file = st.file_uploader("📷 إرفاق صورة", type=["png", "jpg", "jpeg"])
 
-    submitted = st.form_submit_button("إضافة")
+    submitted = st.form_submit_button("➕ إضافة شكوى")
     if submitted:
-        if not comp_id.strip():
-            st.error("❌ رقم الشكوى مطلوب")
+        if comp_id.strip() and comp_type != "اختر نوع الشكوى...":
+            complaints = complaints_sheet.get_all_records()
+            archive = archive_sheet.get_all_records()
+            active_ids = [str(c["ID"]) for c in complaints]
+            archived_ids = [str(a["ID"]) for a in archive]
+            image_url = ""
+
+            # لو فيه صورة مرفوعة نرفعها عالدرايف
+            if uploaded_file is not None:
+                file_stream = io.BytesIO(uploaded_file.read())
+                file_metadata = {"name": uploaded_file.name, "parents": [FOLDER_ID]}
+                media = MediaIoBaseUpload(file_stream, mimetype=uploaded_file.type, resumable=True)
+                file = drive_service.files().create(body=file_metadata, media_body=media, fields="id").execute()
+                file_id = file.get("id")
+                drive_service.permissions().create(fileId=file_id, body={"role": "reader", "type": "anyone"}).execute()
+                image_url = f"https://drive.google.com/uc?id={file_id}"
+
+            if comp_id in active_ids:
+                st.error("⚠️ رقم الشكوى موجود بالفعل في الشكاوى النشطة")
+
+            elif comp_id in archived_ids:
+                # استرجاع من الأرشيف
+                for i, row in enumerate(archive_sheet.get_all_values()[1:], start=2):
+                    if row[0] == comp_id:
+                        archive_sheet.delete_rows(i)
+                        date_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        complaints_sheet.append_row([comp_id, comp_type, action, date_now, "🔄 مسترجعة", image_url])
+                        st.success("✅ تم استرجاع الشكوى من الأرشيف وإعادة تفعيلها")
+                        st.rerun()
+            else:
+                # إضافة جديدة
+                date_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                complaints_sheet.append_row([comp_id, comp_type, action, date_now, "", image_url])
+                st.success("✅ تم تسجيل الشكوى")
+                st.rerun()
         else:
-            date_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            file_url = upload_to_drive(uploaded_file) if uploaded_file else ""
+            st.error("⚠️ لازم تدخل رقم شكوى وتختار نوع")
 
-            sheet.append_row([comp_id, comp_type, action, date_now, file_url])
-            st.success("✅ تم تسجيل الشكوى")
-            st.rerun()
+# ====== 3. عرض الشكاوى النشطة ======
+st.header("📋 الشكاوى النشطة:")
 
+notes = complaints_sheet.get_all_values()
+if len(notes) > 1:
+    for i, row in enumerate(notes[1:], start=2):
+        comp_id, comp_type, action, date_added = row[:4]
+        restored = row[4] if len(row) > 4 else ""
+        image_url = row[5] if len(row) > 5 else ""
 
-# ====== البحث ======
-st.subheader("🔍 بحث عن شكوى")
-search_id = st.text_input("ادخل رقم الشكوى")
+        with st.expander(f"🆔 شكوى رقم {comp_id} {restored}"):
+            st.write(f"📌 النوع: {comp_type}")
+            st.write(f"✅ الإجراء: {action}")
+            st.caption(f"📅 تاريخ التسجيل: {date_added}")
+            if image_url:
+                st.image(image_url, caption="📷 صورة الشكوى", width=300)
 
-if st.button("بحث") and search_id:
-    row, idx, location = search_complaint(search_id)
-    if row:
-        st.info(f"📋 الشكوى موجودة في: {'الأرشيف' if location=='archive' else 'الشكاوى الجارية'}")
+            new_action = st.text_area("✏️ عدل الإجراء", value=action, key=f"act_{i}")
+            col1, col2, col3 = st.columns(3)
 
-        comp_id, comp_type, action, date_added, file_url = row[:5]
+            if col1.button("💾 حفظ", key=f"save_{i}"):
+                complaints_sheet.update(f"C{i}", [[new_action]])
+                st.success("✅ تم تعديل الشكوى")
+                st.rerun()
 
-        st.write(f"### 🆔 {comp_id}")
-        st.write(f"📌 النوع: {comp_type}")
-        st.write(f"✅ الإجراء: {action}")
-        st.write(f"📅 التاريخ: {date_added}")
-        if file_url:
-            st.markdown(f"[📎 الملف المرفق]({file_url})")
+            if col2.button("🗑️ حذف", key=f"delete_{i}"):
+                complaints_sheet.delete_rows(i)
+                st.warning("🗑️ تم حذف الشكوى")
+                st.rerun()
 
-        # تعديل / حذف / نقل بين الأرشيف والجاري
-        new_type = st.selectbox("📌 نوع الشكوى", types, index=types.index(comp_type) if comp_type in types else 0)
-        new_action = st.text_area("✅ الإجراء المتخذ", value=action)
+            if col3.button("📦 أرشفة", key=f"archive_{i}"):
+                archive_sheet.append_row([comp_id, comp_type, new_action, date_added, restored, image_url])
+                complaints_sheet.delete_rows(i)
+                st.success("♻️ الشكوى انتقلت للأرشيف")
+                st.rerun()
+else:
+    st.info("لا توجد شكاوى حالياً.")
 
-        col1, col2, col3 = st.columns(3)
+# ====== 4. عرض الأرشيف ======
+st.header("📦 الأرشيف (الشكاوى المحلولة):")
 
-        if col1.button("💾 حفظ التعديلات"):
-            if location == "current":
-                sheet.update(f"B{idx}:C{idx}", [[new_type, new_action]])
-            else:
-                archive_sheet.update(f"B{idx}:C{idx}", [[new_type, new_action]])
-            st.success("✅ تم التعديل")
-            st.rerun()
+archived = archive_sheet.get_all_values()
+if len(archived) > 1:
+    for row in archived[1:]:
+        comp_id, comp_type, action, date_added = row[:4]
+        restored = row[4] if len(row) > 4 else ""
+        image_url = row[5] if len(row) > 5 else ""
 
-        if col2.button("🗑️ حذف"):
-            if location == "current":
-                sheet.delete_rows(idx)
-            else:
-                archive_sheet.delete_rows(idx)
-            st.warning("🗑️ تم الحذف")
-            st.rerun()
-
-        if col3.button("📂 نقل"):
-            if location == "current":
-                archive_sheet.append_row(row)
-                sheet.delete_rows(idx)
-                st.success("📦 تم النقل إلى الأرشيف")
-            else:
-                sheet.append_row(row + ["🔄 مسترجعة من الأرشيف"])
-                archive_sheet.delete_rows(idx)
-                st.success("♻️ تم الاسترجاع من الأرشيف")
-            st.rerun()
-    else:
-        st.error("❌ لا يوجد شكوى بهذا الرقم")
+        with st.expander(f"📦 شكوى رقم {comp_id} {restored}"):
+            st.write(f"📌 النوع: {comp_type}")
+            st.write(f"✅ الإجراء: {action}")
+            st.caption(f"📅 تاريخ التسجيل: {date_added}")
+            if image_url:
+                st.image(image_url, caption="📷 صورة الشكوى", width=300)
+else:
+    st.info("لا يوجد شكاوى في الأرشيف.")
