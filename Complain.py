@@ -97,11 +97,23 @@ with st.form("add_complaint", clear_on_submit=True):
         if comp_id.strip() and comp_type != "اختر نوع الشكوى...":
             complaints = complaints_sheet.get_all_records()
             archive = archive_sheet.get_all_records()
-            all_ids = [str(c["ID"]) for c in complaints] + [str(a["ID"]) for a in archive]
+            active_ids = [str(c["ID"]) for c in complaints]
+            archived_ids = [str(a["ID"]) for a in archive]
 
-            if comp_id in all_ids:
-                st.error("⚠️ رقم الشكوى موجود بالفعل")
+            if comp_id in active_ids:
+                st.error("⚠️ رقم الشكوى موجود بالفعل في الشكاوى النشطة")
+
+            elif comp_id in archived_ids:
+                # استرجاع من الأرشيف
+                for i, row in enumerate(archive_sheet.get_all_values()[1:], start=2):
+                    if row[0] == comp_id:
+                        archive_sheet.delete_rows(i)
+                        date_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        complaints_sheet.append_row([comp_id, comp_type, action, date_now, "🔄 مسترجعة"])
+                        st.success("✅ تم استرجاع الشكوى من الأرشيف وإعادة تفعيلها")
+                        st.rerun()
             else:
+                # إضافة جديدة
                 date_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 complaints_sheet.append_row([comp_id, comp_type, action, date_now, ""])
                 st.success("✅ تم تسجيل الشكوى")
