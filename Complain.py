@@ -22,7 +22,7 @@ types_sheet = client.open(SHEET_NAME).worksheet("Types")
 aramex_sheet = client.open(SHEET_NAME).worksheet("معلق ارامكس")
 aramex_archive = client.open(SHEET_NAME).worksheet("أرشيف أرامكس")
 
-# ====== واجهة التطبيق ======
+# ====== إعدادات الصفحة ======
 st.set_page_config(page_title="📢 نظام الشكاوى", page_icon="⚠️")
 st.title("⚠️ نظام إدارة الشكاوى")
 
@@ -119,7 +119,7 @@ def render_complaint(sheet, i, row, in_responded=False):
                 except gspread.exceptions.APIError as e:
                     st.error(f"❌ حدث خطأ عند النقل: {e}")
 
-# ====== 1. البحث ======
+# ====== 1. البحث عن الشكاوى ======
 st.header("🔍 البحث عن شكوى")
 search_id = st.text_input("🆔 اكتب رقم الشكوى")
 
@@ -151,38 +151,38 @@ with st.form("add_complaint", clear_on_submit=True):
             responded = responded_sheet.get_all_records()
             archive = archive_sheet.get_all_records()
 
-            all_ids_active = [str(c["ID"]) for c in complaints] + [str(r["ID"]) for r in responded]
-            all_ids_archive = [str(a["ID"]) for a in archive]
+            all_active_ids = [str(c["ID"]) for c in complaints] + [str(r["ID"]) for r in responded]
+            all_archive_ids = [str(a["ID"]) for a in archive]
 
             date_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-            if comp_id in all_ids_active:
-                st.error("⚠️ رقم الشكوى موجود بالفعل")
-            elif comp_id in all_ids_archive:
-                # إذا موجودة في الأرشيف، أرجعها للنشطة
-                for idx, row in enumerate(archive[1:], start=2):
+            if comp_id in all_active_ids:
+                st.error("⚠️ رقم الشكوى موجود بالفعل في النشطة أو المردودة")
+            elif comp_id in all_archive_ids:
+                # إعادة الشكوى من الأرشيف للنشطة
+                for idx, row in enumerate(archive_sheet.get_all_values()[1:], start=2):
                     if str(row[0]) == comp_id:
-                        notes_arch = row[2]
-                        action_arch = row[3]
-                        restored = row[5] if len(row) > 5 else ""
-                        safe_append(complaints_sheet, [comp_id, comp_type, notes_arch, action_arch, date_now, restored])
-                        safe_delete(archive_sheet, idx)
+                        restored_notes = row[2]
+                        restored_action = row[3]
+                        restored_flag = "🔄 مسترجعة"
+                        complaints_sheet.append_row([comp_id, comp_type, restored_notes, restored_action, date_now, restored_flag])
+                        archive_sheet.delete_rows(idx)
                         st.success("✅ الشكوى كانت في الأرشيف وتمت إعادتها للنشطة")
                         st.rerun()
             else:
-                # شكوى جديدة
+                # تسجيل شكوى جديدة
                 if action.strip():
-                    safe_append(responded_sheet, [comp_id, comp_type, notes, action, date_now, ""])
+                    responded_sheet.append_row([comp_id, comp_type, notes, action, date_now, ""])
                     st.success("✅ تم تسجيل الشكوى في الإجراءات المردودة")
                 else:
-                    safe_append(complaints_sheet, [comp_id, comp_type, notes, "", date_now, ""])
+                    complaints_sheet.append_row([comp_id, comp_type, notes, "", date_now, ""])
                     st.success("✅ تم تسجيل الشكوى في النشطة")
                 st.rerun()
         else:
             st.error("⚠️ لازم تدخل رقم شكوى وتختار نوع")
 
 # ====== 3. عرض الشكاوى النشطة ======
-st.header("📋 الشكاوى النشطة (بدون إجراء):")
+st.header("📋 الشكاوى النشطة:")
 active_notes = complaints_sheet.get_all_values()
 if len(active_notes) > 1:
     for i, row in enumerate(active_notes[1:], start=2):
@@ -236,40 +236,31 @@ aramex_data = aramex_sheet.get_all_values()
 if len(aramex_data) > 1:
     for i, row in enumerate(aramex_data[1:], start=2):
         order_id, status, date_added, action = row[:4]
-        with st.expander(f"📦 طلب {order_id} | 📌 {status} | 📅 {date_added}"):
+        with st.expander(f"طلب {order_id}"):
             st.write(f"📌 الحالة الحالية: {status}")
             st.write(f"✅ الإجراء الحالي: {action}")
             st.caption(f"📅 تاريخ الإضافة: {date_added}")
-            
+
             new_status = st.text_input("✏️ عدل الحالة", value=status, key=f"status_{i}")
             new_action = st.text_area("✏️ عدل الإجراء", value=action, key=f"action_{i}")
-            
+
             col1, col2, col3 = st.columns(3)
-            
+
             if col1.button("💾 حفظ", key=f"save_aramex_{i}"):
-                try:
-                    aramex_sheet.update(f"B{i}", [[new_status]])
-                    aramex_sheet.update(f"D{i}", [[new_action]])
-                    st.success("✅ تم تعديل الطلب")
-                    st.rerun()
-                except gspread.exceptions.APIError as e:
-                    st.error(f"❌ حدث خطأ عند الحفظ: {e}")
-            
+                aramex_sheet.update(f"B{i}", [[new_status]])
+                aramex_sheet.update(f"D{i}", [[new_action]])
+                st.success("✅ تم تعديل الطلب")
+                st.rerun()
+
             if col2.button("🗑️ حذف", key=f"delete_aramex_{i}"):
-                try:
-                    safe_delete(aramex_sheet, i)
-                    st.warning("🗑️ تم حذف الطلب")
-                    st.rerun()
-                except gspread.exceptions.APIError as e:
-                    st.error(f"❌ حدث خطأ عند الحذف: {e}")
-            
+                safe_delete(aramex_sheet, i)
+                st.warning("🗑️ تم حذف الطلب")
+                st.rerun()
+
             if col3.button("📦 أرشفة", key=f"archive_aramex_{i}"):
-                try:
-                    safe_append(aramex_archive, [order_id, new_status, date_added, new_action])
-                    safe_delete(aramex_sheet, i)
-                    st.success("♻️ الطلب اتنقل لأرشيف أرامكس")
-                    st.rerun()
-                except gspread.exceptions.APIError as e:
-                    st.error(f"❌ حدث خطأ عند الأرشفة: {e}")
+                safe_append(aramex_archive, [order_id, new_status, date_added, new_action])
+                safe_delete(aramex_sheet, i)
+                st.success("♻️ الطلب اتنقل لأرشيف أرامكس")
+                st.rerun()
 else:
     st.info("لا توجد طلبات معلقة حالياً.")
