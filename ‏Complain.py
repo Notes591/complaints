@@ -81,16 +81,16 @@ def render_complaint(sheet, i, row, in_responded=False):
         st.write(f"✅ الإجراء: {action}")
         st.caption(f"📅 تاريخ التسجيل: {date_added}")
 
-        # حقل لتعديل النوع
-        new_type = st.selectbox("📌 عدل نوع الشكوى", ["اختر نوع الشكوى..."] + types_list, index=(types_list.index(comp_type)+1 if comp_type in types_list else 0), key=f"type_{i}_{sheet.title}")
+        # SelectBox لتعديل النوع لأي جدول
+        default_index = types_list.index(comp_type) if comp_type in types_list else 0
+        new_type = st.selectbox("📌 عدل نوع الشكوى", types_list, index=default_index, key=f"type_{i}_{sheet.title}")
         new_notes = st.text_area("✏️ عدل الملاحظات", value=notes, key=f"notes_{i}_{sheet.title}")
         new_action = st.text_area("✏️ عدل الإجراء", value=action, key=f"action_{i}_{sheet.title}")
 
         col1, col2, col3, col4 = st.columns(4)
 
         if col1.button("💾 حفظ", key=f"save_{i}_{sheet.title}"):
-            if new_type != "اختر نوع الشكوى...":
-                safe_update(sheet, f"B{i}", [[new_type]])
+            safe_update(sheet, f"B{i}", [[new_type]])
             safe_update(sheet, f"C{i}", [[new_notes]])
             safe_update(sheet, f"D{i}", [[new_action]])
             st.success("✅ تم التعديل")
@@ -126,7 +126,7 @@ search_id = st.text_input("🆔 اكتب رقم الشكوى")
 if st.button("🔍 بحث"):
     if search_id.strip():
         found = False
-        for sheet in [complaints_sheet, responded_sheet, archive_sheet]:
+        for sheet in [complaints_sheet, responded_sheet, archive_sheet, aramex_sheet, aramex_archive]:
             data = sheet.get_all_values()
             for i, row in enumerate(data[1:], start=2):
                 if row[0] == search_id:
