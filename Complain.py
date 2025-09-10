@@ -4,6 +4,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
 import time
 import gspread.exceptions
+import webbrowser
 
 # ====== الاتصال بجوجل شيت ======
 scope = ["https://www.googleapis.com/auth/spreadsheets",
@@ -16,7 +17,6 @@ client = gspread.authorize(creds)
 # ====== أوراق جوجل شيت ======
 SHEET_NAME = "Complaints"
 
-# Retry عند فتح الأوراق لتجنب APIError
 def open_sheet(title):
     for _ in range(5):
         try:
@@ -71,11 +71,13 @@ def safe_delete(sheet, row_index):
     st.error("❌ فشل delete_rows بعد عدة محاولات")
     return False
 
-# ====== دالة عرض الشكوى مع أزرار النقل + رابط الفاتورة ======
+# ====== دالة عرض الشكوى مع أزرار النقل + زر الفاتورة ======
 def render_complaint(sheet, i, row, in_responded=False):
     comp_id, comp_type, notes, action, date_added = row[:5]
     restored = row[5] if len(row) > 5 else ""
-    invoice_link = row[6] if len(row) > 6 else f"https://homelamasat.com/wp-admin/admin-ajax.php?action=generate_wpo_wcpdf&document_type=invoice&bulk&_wpnonce=eb55186c83&order_ids={comp_id}"
+
+    # توليد الرابط دائمًا
+    invoice_link = f"https://homelamasat.com/wp-admin/admin-ajax.php?action=generate_wpo_wcpdf&document_type=invoice&bulk&_wpnonce=eb55186c83&order_ids={comp_id}"
 
     with st.expander(f"🆔 {comp_id} | 📌 {comp_type} | 📅 {date_added} {restored}"):
         st.write(f"📌 النوع: {comp_type}")
@@ -83,8 +85,9 @@ def render_complaint(sheet, i, row, in_responded=False):
         st.write(f"✅ الإجراء: {action}")
         st.caption(f"📅 تاريخ التسجيل: {date_added}")
 
-        # رابط الفاتورة
-        st.markdown(f"📄 [عرض الفاتورة]({invoice_link})", unsafe_allow_html=True)
+        # زر واضح لفتح الفاتورة
+        if st.button("📄 فتح الفاتورة", key=f"invoice_{i}_{sheet.title}"):
+            st.write(f"[اضغط هنا لفتح الفاتورة]({invoice_link})")
 
         new_notes = st.text_area("✏️ عدل الملاحظات", value=notes, key=f"notes_{i}_{sheet.title}")
         new_action = st.text_area("✏️ عدل الإجراء", value=action, key=f"action_{i}_{sheet.title}")
