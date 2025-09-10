@@ -40,7 +40,7 @@ if st.button("🔍 بحث"):
         for i, row in enumerate(complaints[1:], start=2):
             if row[0] == search_id:
                 found = True
-                with st.expander(f"🆔 شكوى رقم {row[0]}"):
+                with st.expander(f"🆔 شكوى {row[0]} | 📌 {row[1]} | 📅 {row[3]}"):
                     comp_id, comp_type, action, date_added = row[:4]
                     restored = row[4] if len(row) > 4 else ""
 
@@ -71,7 +71,7 @@ if st.button("🔍 بحث"):
         for i, row in enumerate(archive[1:], start=2):
             if row[0] == search_id:
                 found = True
-                with st.expander(f"📦 شكوى رقم {row[0]} (في الأرشيف)"):
+                with st.expander(f"📦 شكوى {row[0]} | 📌 {row[1]} | 📅 {row[3]} (في الأرشيف)"):
                     comp_id, comp_type, action, date_added = row[:4]
                     restored = row[4] if len(row) > 4 else ""
 
@@ -132,7 +132,7 @@ if len(notes) > 1:
         comp_id, comp_type, action, date_added = row[:4]
         restored = row[4] if len(row) > 4 else ""
 
-        with st.expander(f"🆔 شكوى رقم {comp_id} {restored}"):
+        with st.expander(f"🆔 شكوى {comp_id} | 📌 {comp_type} | 📅 {date_added} {restored}"):
             st.write(f"📌 النوع: {comp_type}")
             st.write(f"✅ الإجراء: {action}")
             st.caption(f"📅 تاريخ التسجيل: {date_added}")
@@ -167,7 +167,7 @@ if len(archived) > 1:
         comp_id, comp_type, action, date_added = row[:4]
         restored = row[4] if len(row) > 4 else ""
 
-        with st.expander(f"📦 شكوى رقم {comp_id} {restored}"):
+        with st.expander(f"📦 شكوى {comp_id} | 📌 {comp_type} | 📅 {date_added} {restored}"):
             st.write(f"📌 النوع: {comp_type}")
             st.write(f"✅ الإجراء: {action}")
             st.caption(f"📅 تاريخ التسجيل: {date_added}")
@@ -199,31 +199,27 @@ if len(aramex_data) > 1:
     for i, row in enumerate(aramex_data[1:], start=2):
         order_id, status, date_added, action = row[:4]
         
-        with st.expander(f"طلب {order_id}"):
+        with st.expander(f"📦 طلب {order_id} | 📌 {status} | 📅 {date_added}"):
             st.write(f"📌 الحالة الحالية: {status}")
             st.write(f"✅ الإجراء الحالي: {action}")
             st.caption(f"📅 تاريخ الإضافة: {date_added}")
             
-            # مدخلات للتعديل
             new_status = st.text_input("✏️ عدل الحالة", value=status, key=f"status_{i}")
             new_action = st.text_area("✏️ عدل الإجراء", value=action, key=f"action_{i}")
             
             col1, col2, col3 = st.columns(3)
             
-            # زرار حفظ التعديلات
             if col1.button("💾 حفظ", key=f"save_aramex_{i}"):
                 aramex_sheet.update(f"B{i}", [[new_status]])
                 aramex_sheet.update(f"D{i}", [[new_action]])
                 st.success("✅ تم تعديل الطلب")
                 st.rerun()
             
-            # زرار الحذف
             if col2.button("🗑️ حذف", key=f"delete_aramex_{i}"):
                 aramex_sheet.delete_rows(i)
                 st.warning("🗑️ تم حذف الطلب")
                 st.rerun()
             
-            # زرار الأرشفة
             if col3.button("📦 أرشفة", key=f"archive_aramex_{i}"):
                 aramex_archive.append_row([order_id, new_status, date_added, new_action])
                 aramex_sheet.delete_rows(i)
