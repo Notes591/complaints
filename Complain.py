@@ -13,7 +13,8 @@ client = gspread.authorize(creds)
 
 # أوراق جوجل شيت
 SHEET_NAME = "Complaints"
-complaints_sheet = client.open(SHEET_NAME).worksheet("Complaints")
+complaints_sheet = client.open(SHEET_NAME).worksheet("Complaints")     # النشطة (ملاحظات فقط)
+responded_sheet = client.open(SHEET_NAME).worksheet("Responded")       # الإجراءات المردودة
 archive_sheet = client.open(SHEET_NAME).worksheet("Archive")
 types_sheet = client.open(SHEET_NAME).worksheet("Types")
 aramex_sheet = client.open(SHEET_NAME).worksheet("معلق ارامكس")
@@ -30,61 +31,61 @@ types_list = [row[0] for row in types_sheet.get_all_values()[1:]]
 st.header("🔍 البحث عن شكوى")
 search_id = st.text_input("🆔 اكتب رقم الشكوى")
 
+def render_complaint(sheet, i, row, in_responded=False):
+    comp_id, comp_type, notes, action, date_added = row[:5]
+    restored = row[5] if len(row) > 5 else ""
+
+    with st.expander(f"🆔 شكوى {comp_id} | 📌 {comp_type} | 📅 {date_added} {restored}"):
+        st.write(f"📌 النوع: {comp_type}")
+        st.write(f"📝 الملاحظات: {notes}")
+        st.write(f"✅ الإجراء: {action}")
+        st.caption(f"📅 تاريخ التسجيل: {date_added}")
+
+        new_notes = st.text_area("✏️ عدل الملاحظات", value=notes, key=f"notes_{i}_{sheet.title}")
+        new_action = st.text_area("✏️ عدل الإجراء", value=action, key=f"action_{i}_{sheet.title}")
+
+        col1, col2, col3, col4 = st.columns(4)
+
+        if col1.button("💾 حفظ", key=f"save_{i}_{sheet.title}"):
+            sheet.update(f"C{i}", [[new_notes]])
+            sheet.update(f"D{i}", [[new_action]])
+            st.success("✅ تم التعديل")
+            st.rerun()
+
+        if col2.button("🗑️ حذف", key=f"delete_{i}_{sheet.title}"):
+            sheet.delete_rows(i)
+            st.warning("🗑️ تم حذف الشكوى")
+            st.rerun()
+
+        if col3.button("📦 أرشفة", key=f"archive_{i}_{sheet.title}"):
+            archive_sheet.append_row([comp_id, comp_type, new_notes, new_action, date_added, restored])
+            sheet.delete_rows(i)
+            st.success("♻️ الشكوى انتقلت للأرشيف")
+            st.rerun()
+
+        # نقل بين النشطة ↔️ المردودة
+        if not in_responded and new_action.strip():  # لو كتب إجراء
+            if col4.button("➡️ نقل للإجراءات المردودة", key=f"to_responded_{i}"):
+                responded_sheet.append_row([comp_id, comp_type, new_notes, new_action, date_added, restored])
+                sheet.delete_rows(i)
+                st.success("✅ اتنقلت لقائمة الإجراءات المردودة")
+                st.rerun()
+        elif in_responded and new_notes.strip():  # لو كتب ملاحظات جديدة
+            if col4.button("⬅️ رجوع للنشطة", key=f"to_active_{i}"):
+                complaints_sheet.append_row([comp_id, comp_type, new_notes, "", date_added, restored])
+                sheet.delete_rows(i)
+                st.success("✅ اتنقلت تاني لقائمة النشطة")
+                st.rerun()
+
 if st.button("🔍 بحث"):
     if search_id.strip():
-        complaints = complaints_sheet.get_all_values()
-        archive = archive_sheet.get_all_values()
         found = False
-
-        # بحث في الشكاوى النشطة
-        for i, row in enumerate(complaints[1:], start=2):
-            if row[0] == search_id:
-                found = True
-                with st.expander(f"🆔 شكوى {row[0]} | 📌 {row[1]} | 📅 {row[3]}"):
-                    comp_id, comp_type, action, date_added = row[:4]
-                    restored = row[4] if len(row) > 4 else ""
-
-                    st.write(f"📌 النوع: {comp_type}")
-                    st.write(f"✅ الإجراء: {action}")
-                    st.caption(f"📅 تاريخ التسجيل: {date_added}")
-
-                    new_action = st.text_area("✏️ عدل الإجراء", value=action, key=f"search_act_{i}")
-                    col1, col2, col3 = st.columns(3)
-
-                    if col1.button("💾 حفظ", key=f"search_save_{i}"):
-                        complaints_sheet.update(f"C{i}", [[new_action]])
-                        st.success("✅ تم تعديل الشكوى")
-                        st.rerun()
-
-                    if col2.button("🗑️ حذف", key=f"search_del_{i}"):
-                        complaints_sheet.delete_rows(i)
-                        st.warning("🗑️ تم حذف الشكوى")
-                        st.rerun()
-
-                    if col3.button("📦 أرشفة", key=f"search_arc_{i}"):
-                        archive_sheet.append_row([comp_id, comp_type, new_action, date_added, restored])
-                        complaints_sheet.delete_rows(i)
-                        st.success("♻️ الشكوى اتنقلت للأرشيف")
-                        st.rerun()
-
-        # بحث في الأرشيف
-        for i, row in enumerate(archive[1:], start=2):
-            if row[0] == search_id:
-                found = True
-                with st.expander(f"📦 شكوى {row[0]} | 📌 {row[1]} | 📅 {row[3]} (في الأرشيف)"):
-                    comp_id, comp_type, action, date_added = row[:4]
-                    restored = row[4] if len(row) > 4 else ""
-
-                    st.write(f"📌 النوع: {comp_type}")
-                    st.write(f"✅ الإجراء: {action}")
-                    st.caption(f"📅 تاريخ التسجيل: {date_added}")
-
-                    if st.button("♻️ استرجاع", key=f"search_restore_{i}"):
-                        complaints_sheet.append_row([comp_id, comp_type, action, date_added, "🔄 مسترجعة"])
-                        archive_sheet.delete_rows(i)
-                        st.success("✅ تم استرجاع الشكوى")
-                        st.rerun()
-
+        for sheet in [complaints_sheet, responded_sheet, archive_sheet]:
+            data = sheet.get_all_values()
+            for i, row in enumerate(data[1:], start=2):
+                if row[0] == search_id:
+                    found = True
+                    render_complaint(sheet, i, row, in_responded=(sheet==responded_sheet))
         if not found:
             st.error("❌ لم يتم العثور على الشكوى")
 
@@ -94,87 +95,70 @@ st.header("➕ تسجيل شكوى جديدة")
 with st.form("add_complaint", clear_on_submit=True):
     comp_id = st.text_input("🆔 رقم الشكوى")
     comp_type = st.selectbox("📌 نوع الشكوى", ["اختر نوع الشكوى..."] + types_list, index=0)
+    notes = st.text_area("📝 ملاحظات الشكوى")
     action = st.text_area("✅ الإجراء المتخذ")
 
     submitted = st.form_submit_button("➕ إضافة شكوى")
     if submitted:
         if comp_id.strip() and comp_type != "اختر نوع الشكوى...":
             complaints = complaints_sheet.get_all_records()
+            responded = responded_sheet.get_all_records()
             archive = archive_sheet.get_all_records()
-            active_ids = [str(c["ID"]) for c in complaints]
-            archived_ids = [str(a["ID"]) for a in archive]
 
-            if comp_id in active_ids:
-                st.error("⚠️ رقم الشكوى موجود بالفعل في الشكاوى النشطة")
+            all_ids = [str(c["ID"]) for c in complaints] + \
+                      [str(r["ID"]) for r in responded] + \
+                      [str(a["ID"]) for a in archive]
 
-            elif comp_id in archived_ids:
-                for i, row in enumerate(archive_sheet.get_all_values()[1:], start=2):
-                    if row[0] == comp_id:
-                        archive_sheet.delete_rows(i)
-                        date_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        complaints_sheet.append_row([comp_id, comp_type, action, date_now, "🔄 مسترجعة"])
-                        st.success("✅ تم استرجاع الشكوى من الأرشيف وإعادة تفعيلها")
-                        st.rerun()
+            if comp_id in all_ids:
+                st.error("⚠️ رقم الشكوى موجود بالفعل")
             else:
                 date_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                complaints_sheet.append_row([comp_id, comp_type, action, date_now, ""])
-                st.success("✅ تم تسجيل الشكوى")
+                if action.strip():
+                    responded_sheet.append_row([comp_id, comp_type, notes, action, date_now, ""])
+                    st.success("✅ تم تسجيل الشكوى في الإجراءات المردودة")
+                else:
+                    complaints_sheet.append_row([comp_id, comp_type, notes, "", date_now, ""])
+                    st.success("✅ تم تسجيل الشكوى في النشطة")
                 st.rerun()
         else:
             st.error("⚠️ لازم تدخل رقم شكوى وتختار نوع")
 
 # ====== 3. عرض الشكاوى النشطة ======
-st.header("📋 الشكاوى النشطة:")
+st.header("📋 الشكاوى النشطة (بدون إجراء):")
 
-notes = complaints_sheet.get_all_values()
-if len(notes) > 1:
-    for i, row in enumerate(notes[1:], start=2):
-        comp_id, comp_type, action, date_added = row[:4]
-        restored = row[4] if len(row) > 4 else ""
-
-        with st.expander(f"🆔 شكوى {comp_id} | 📌 {comp_type} | 📅 {date_added} {restored}"):
-            st.write(f"📌 النوع: {comp_type}")
-            st.write(f"✅ الإجراء: {action}")
-            st.caption(f"📅 تاريخ التسجيل: {date_added}")
-
-            new_action = st.text_area("✏️ عدل الإجراء", value=action, key=f"act_{i}")
-            col1, col2, col3 = st.columns(3)
-
-            if col1.button("💾 حفظ", key=f"save_{i}"):
-                complaints_sheet.update(f"C{i}", [[new_action]])
-                st.success("✅ تم تعديل الشكوى")
-                st.rerun()
-
-            if col2.button("🗑️ حذف", key=f"delete_{i}"):
-                complaints_sheet.delete_rows(i)
-                st.warning("🗑️ تم حذف الشكوى")
-                st.rerun()
-
-            if col3.button("📦 أرشفة", key=f"archive_{i}"):
-                archive_sheet.append_row([comp_id, comp_type, new_action, date_added, restored])
-                complaints_sheet.delete_rows(i)
-                st.success("♻️ الشكوى انتقلت للأارشيف")
-                st.rerun()
+active_notes = complaints_sheet.get_all_values()
+if len(active_notes) > 1:
+    for i, row in enumerate(active_notes[1:], start=2):
+        render_complaint(complaints_sheet, i, row, in_responded=False)
 else:
-    st.info("لا توجد شكاوى حالياً.")
+    st.info("لا توجد شكاوى نشطة حالياً.")
 
-# ====== 4. عرض الأرشيف ======
+# ====== 4. عرض الإجراءات المردودة ======
+st.header("✅ الإجراءات المردودة:")
+
+responded_notes = responded_sheet.get_all_values()
+if len(responded_notes) > 1:
+    for i, row in enumerate(responded_notes[1:], start=2):
+        render_complaint(responded_sheet, i, row, in_responded=True)
+else:
+    st.info("لا توجد شكاوى مردودة حالياً.")
+
+# ====== 5. عرض الأرشيف ======
 st.header("📦 الأرشيف (الشكاوى المحلولة):")
 
 archived = archive_sheet.get_all_values()
 if len(archived) > 1:
     for row in archived[1:]:
-        comp_id, comp_type, action, date_added = row[:4]
-        restored = row[4] if len(row) > 4 else ""
-
+        comp_id, comp_type, notes, action, date_added = row[:5]
+        restored = row[5] if len(row) > 5 else ""
         with st.expander(f"📦 شكوى {comp_id} | 📌 {comp_type} | 📅 {date_added} {restored}"):
-            st.write(f"📌 النوع: {comp_type}")
+            st.write(f"📝 الملاحظات: {notes}")
             st.write(f"✅ الإجراء: {action}")
             st.caption(f"📅 تاريخ التسجيل: {date_added}")
 else:
     st.info("لا يوجد شكاوى في الأرشيف.")
 
-# ====== 5. معلق ارامكس ======
+# ====== 6. معلق ارامكس ======
 st.header("🚚 معلق ارامكس")
 
 with st.form("add_aramex", clear_on_submit=True):
