@@ -39,7 +39,7 @@ def safe_append(sheet, row_data, retries=5, delay=1):
         try:
             sheet.append_row(row_data)
             return True
-        except gspread.exceptions.APIError as e:
+        except gspread.exceptions.APIError:
             time.sleep(delay)
     st.error("❌ فشل append_row بعد عدة محاولات.")
     return False
@@ -49,7 +49,7 @@ def safe_update(sheet, cell_range, values, retries=5, delay=1):
         try:
             sheet.update(cell_range, values)
             return True
-        except gspread.exceptions.APIError as e:
+        except gspread.exceptions.APIError:
             time.sleep(delay)
     st.error("❌ فشل update بعد عدة محاولات.")
     return False
@@ -59,28 +59,32 @@ def safe_delete(sheet, row_index, retries=5, delay=1):
         try:
             sheet.delete_rows(row_index)
             return True
-        except gspread.exceptions.APIError as e:
+        except gspread.exceptions.APIError:
             time.sleep(delay)
     st.error("❌ فشل delete_rows بعد عدة محاولات.")
     return False
 
-# ====== دالة عرض الشكوى ======
+# ====== دالة عرض الشكوى مع تعديل النوع ======
 def render_complaint(sheet, i, row, in_responded=False):
     comp_id, comp_type, notes, action, date_added = row[:5]
     restored = row[5] if len(row) > 5 else ""
 
     with st.expander(f"🆔 {comp_id} | 📌 {comp_type} | 📅 {date_added} {restored}"):
-        st.write(f"📌 النوع: {comp_type}")
+        st.write(f"📌 النوع الحالي: {comp_type}")
         st.write(f"📝 الملاحظات: {notes}")
         st.write(f"✅ الإجراء: {action}")
         st.caption(f"📅 تاريخ التسجيل: {date_added}")
 
+        # تعديل النوع
+        new_type = st.selectbox("✏️ عدل نوع الشكوى", [comp_type] + [t for t in types_list if t != comp_type],
+                                index=0, key=f"type_{i}_{sheet.title}")
         new_notes = st.text_area("✏️ عدل الملاحظات", value=notes, key=f"notes_{i}_{sheet.title}")
         new_action = st.text_area("✏️ عدل الإجراء", value=action, key=f"action_{i}_{sheet.title}")
 
         col1, col2, col3, col4 = st.columns(4)
 
         if col1.button("💾 حفظ", key=f"save_{i}_{sheet.title}"):
+            safe_update(sheet, f"B{i}", [[new_type]])  # تحديث النوع
             safe_update(sheet, f"C{i}", [[new_notes]])
             safe_update(sheet, f"D{i}", [[new_action]])
             st.success("✅ تم التعديل")
@@ -92,21 +96,23 @@ def render_complaint(sheet, i, row, in_responded=False):
             st.rerun()
 
         if col3.button("📦 أرشفة", key=f"archive_{i}_{sheet.title}"):
-            safe_append(archive_sheet, [comp_id, comp_type, new_notes, new_action, date_added, restored])
+            safe_append(archive_sheet, [comp_id, new_type, new_notes, new_action, date_added, restored])
+            time.sleep(0.5)
             safe_delete(sheet, i)
             st.success("♻️ الشكوى انتقلت للأرشيف")
             st.rerun()
 
-        # أزرار النقل دائمًا ظاهرة
         if not in_responded:
             if col4.button("➡️ نقل للإجراءات المردودة", key=f"to_responded_{i}"):
-                safe_append(responded_sheet, [comp_id, comp_type, new_notes, new_action, date_added, restored])
+                safe_append(responded_sheet, [comp_id, new_type, new_notes, new_action, date_added, restored])
+                time.sleep(0.5)
                 safe_delete(sheet, i)
                 st.success("✅ اتنقلت للإجراءات المردودة")
                 st.rerun()
         else:
             if col4.button("⬅️ رجوع للنشطة", key=f"to_active_{i}"):
-                safe_append(complaints_sheet, [comp_id, comp_type, new_notes, new_action, date_added, restored])
+                safe_append(complaints_sheet, [comp_id, new_type, new_notes, new_action, date_added, restored])
+                time.sleep(0.5)
                 safe_delete(sheet, i)
                 st.success("✅ اتنقلت للنشطة")
                 st.rerun()
@@ -155,10 +161,12 @@ with st.form("add_complaint", clear_on_submit=True):
                     if str(row[0]) == comp_id:
                         restored_notes = row[2]
                         restored_action = row[3]
-                        safe_append(complaints_sheet, [comp_id, comp_type, restored_notes, restored_action, date_now, "🔄 مسترجعة"])
-                        safe_delete(archive_sheet, idx)
-                        st.success("✅ الشكوى كانت في الأرشيف وتمت إعادتها للنشطة")
-                        st.rerun()
+                        restored_type = row[1]
+                        if safe_append(complaints_sheet, [comp_id, restored_type, restored_notes, restored_action, date_now, "🔄 مسترجعة"]):
+                            time.sleep(0.5)
+                            safe_delete(archive_sheet, idx)
+                            st.success("✅ الشكوى كانت في الأرشيف وتمت إعادتها للنشطة")
+                            st.rerun()
             else:
                 if action.strip():
                     safe_append(responded_sheet, [comp_id, comp_type, notes, action, date_now, ""])
@@ -194,6 +202,7 @@ if len(archived) > 1:
         comp_id, comp_type, notes, action, date_added = row[:5]
         restored = row[5] if len(row) > 5 else ""
         with st.expander(f"📦 {comp_id} | 📌 {comp_type} | 📅 {date_added} {restored}"):
+            # عرض النوع في الأرشيف فقط (لا تعديل مباشر هنا)
             st.write(f"📌 النوع: {comp_type}")
             st.write(f"✅ الإجراء: {action}")
             st.caption(f"📅 تاريخ التسجيل: {date_added}")
@@ -247,6 +256,7 @@ if len(aramex_data) > 1:
 
             if col3.button("📦 أرشفة", key=f"archive_aramex_{i}"):
                 safe_append(aramex_archive, [order_id, new_status, date_added, new_action])
+                time.sleep(0.5)
                 safe_delete(aramex_sheet, i)
                 st.success("♻️ الطلب اتنقل لأرشيف أرامكس")
                 st.rerun()
