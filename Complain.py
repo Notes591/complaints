@@ -71,16 +71,20 @@ def safe_delete(sheet, row_index):
     st.error("❌ فشل delete_rows بعد عدة محاولات")
     return False
 
-# ====== دالة عرض الشكوى مع أزرار النقل ======
+# ====== دالة عرض الشكوى مع أزرار النقل + رابط الفاتورة ======
 def render_complaint(sheet, i, row, in_responded=False):
     comp_id, comp_type, notes, action, date_added = row[:5]
     restored = row[5] if len(row) > 5 else ""
+    invoice_link = row[6] if len(row) > 6 else f"https://homelamasat.com/wp-admin/admin-ajax.php?action=generate_wpo_wcpdf&document_type=invoice&bulk&_wpnonce=eb55186c83&order_ids={comp_id}"
 
     with st.expander(f"🆔 {comp_id} | 📌 {comp_type} | 📅 {date_added} {restored}"):
         st.write(f"📌 النوع: {comp_type}")
         st.write(f"📝 الملاحظات: {notes}")
         st.write(f"✅ الإجراء: {action}")
         st.caption(f"📅 تاريخ التسجيل: {date_added}")
+
+        # رابط الفاتورة
+        st.markdown(f"📄 [عرض الفاتورة]({invoice_link})", unsafe_allow_html=True)
 
         new_notes = st.text_area("✏️ عدل الملاحظات", value=notes, key=f"notes_{i}_{sheet.title}")
         new_action = st.text_area("✏️ عدل الإجراء", value=action, key=f"action_{i}_{sheet.title}")
@@ -99,21 +103,20 @@ def render_complaint(sheet, i, row, in_responded=False):
             st.rerun()
 
         if col3.button("📦 أرشفة", key=f"archive_{i}_{sheet.title}"):
-            safe_append(archive_sheet, [comp_id, comp_type, new_notes, new_action, date_added, restored])
+            safe_append(archive_sheet, [comp_id, comp_type, new_notes, new_action, date_added, restored, invoice_link])
             safe_delete(sheet, i)
             st.success("♻️ الشكوى انتقلت للأرشيف")
             st.rerun()
 
-        # أزرار النقل دائمًا ظاهرة
         if not in_responded:
             if col4.button("➡️ نقل للإجراءات المردودة", key=f"to_responded_{i}"):
-                safe_append(responded_sheet, [comp_id, comp_type, new_notes, new_action, date_added, restored])
+                safe_append(responded_sheet, [comp_id, comp_type, new_notes, new_action, date_added, restored, invoice_link])
                 safe_delete(sheet, i)
                 st.success("✅ اتنقلت للإجراءات المردودة")
                 st.rerun()
         else:
             if col4.button("⬅️ رجوع للنشطة", key=f"to_active_{i}"):
-                safe_append(complaints_sheet, [comp_id, comp_type, new_notes, new_action, date_added, restored])
+                safe_append(complaints_sheet, [comp_id, comp_type, new_notes, new_action, date_added, restored, invoice_link])
                 safe_delete(sheet, i)
                 st.success("✅ اتنقلت للنشطة")
                 st.rerun()
@@ -149,6 +152,8 @@ with st.form("add_complaint", clear_on_submit=True):
             archive = archive_sheet.get_all_records()
             date_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+            invoice_link = f"https://homelamasat.com/wp-admin/admin-ajax.php?action=generate_wpo_wcpdf&document_type=invoice&bulk&_wpnonce=eb55186c83&order_ids={comp_id}"
+
             all_active_ids = [str(c["ID"]) for c in complaints] + [str(r["ID"]) for r in responded]
             all_archive_ids = [str(a["ID"]) for a in archive]
 
@@ -160,16 +165,17 @@ with st.form("add_complaint", clear_on_submit=True):
                     if str(row[0]) == comp_id:
                         restored_notes = row[2]
                         restored_action = row[3]
-                        safe_append(complaints_sheet, [comp_id, comp_type, restored_notes, restored_action, date_now, "🔄 مسترجعة"])
+                        restored_invoice = row[6] if len(row) > 6 else invoice_link
+                        safe_append(complaints_sheet, [comp_id, comp_type, restored_notes, restored_action, date_now, "🔄 مسترجعة", restored_invoice])
                         safe_delete(archive_sheet, idx)
                         st.success("✅ الشكوى كانت في الأرشيف وتمت إعادتها للنشطة")
                         st.rerun()
             else:
                 if action.strip():
-                    safe_append(responded_sheet, [comp_id, comp_type, notes, action, date_now, ""])
+                    safe_append(responded_sheet, [comp_id, comp_type, notes, action, date_now, "", invoice_link])
                     st.success("✅ تم تسجيل الشكوى في المردودة")
                 else:
-                    safe_append(complaints_sheet, [comp_id, comp_type, notes, "", date_now, ""])
+                    safe_append(complaints_sheet, [comp_id, comp_type, notes, "", date_now, "", invoice_link])
                     st.success("✅ تم تسجيل الشكوى في النشطة")
                 st.rerun()
         else:
