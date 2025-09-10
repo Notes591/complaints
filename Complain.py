@@ -13,8 +13,8 @@ client = gspread.authorize(creds)
 
 # أوراق جوجل شيت
 SHEET_NAME = "Complaints"
-complaints_sheet = client.open(SHEET_NAME).worksheet("Complaints")     # النشطة (ملاحظات فقط)
-responded_sheet = client.open(SHEET_NAME).worksheet("Responded")       # الإجراءات المردودة
+complaints_sheet = client.open(SHEET_NAME).worksheet("Complaints")
+responded_sheet = client.open(SHEET_NAME).worksheet("Responded")
 archive_sheet = client.open(SHEET_NAME).worksheet("Archive")
 types_sheet = client.open(SHEET_NAME).worksheet("Types")
 aramex_sheet = client.open(SHEET_NAME).worksheet("معلق ارامكس")
@@ -27,10 +27,7 @@ st.title("⚠️ نظام إدارة الشكاوى")
 # تحميل الأنواع
 types_list = [row[0] for row in types_sheet.get_all_values()[1:]]
 
-# ====== 1. البحث ======
-st.header("🔍 البحث عن شكوى")
-search_id = st.text_input("🆔 اكتب رقم الشكوى")
-
+# ====== دالة عرض الشكوى ======
 def render_complaint(sheet, i, row, in_responded=False):
     comp_id, comp_type, notes, action, date_added = row[:5]
     restored = row[5] if len(row) > 5 else ""
@@ -46,36 +43,43 @@ def render_complaint(sheet, i, row, in_responded=False):
 
         col1, col2, col3, col4 = st.columns(4)
 
+        # حفظ التعديلات
         if col1.button("💾 حفظ", key=f"save_{i}_{sheet.title}"):
             sheet.update(f"C{i}", [[new_notes]])
             sheet.update(f"D{i}", [[new_action]])
             st.success("✅ تم التعديل")
             st.rerun()
 
+        # حذف الشكوى
         if col2.button("🗑️ حذف", key=f"delete_{i}_{sheet.title}"):
             sheet.delete_rows(i)
             st.warning("🗑️ تم حذف الشكوى")
             st.rerun()
 
+        # أرشفة الشكوى
         if col3.button("📦 أرشفة", key=f"archive_{i}_{sheet.title}"):
             archive_sheet.append_row([comp_id, comp_type, new_notes, new_action, date_added, restored])
             sheet.delete_rows(i)
             st.success("♻️ الشكوى انتقلت للأرشيف")
             st.rerun()
 
-        # نقل بين النشطة ↔️ المردودة
-        if not in_responded and new_action.strip():  # لو كتب إجراء
+        # أزرار النقل دائمًا ظاهرة
+        if not in_responded:
             if col4.button("➡️ نقل للإجراءات المردودة", key=f"to_responded_{i}"):
                 responded_sheet.append_row([comp_id, comp_type, new_notes, new_action, date_added, restored])
                 sheet.delete_rows(i)
                 st.success("✅ اتنقلت لقائمة الإجراءات المردودة")
                 st.rerun()
-        elif in_responded and new_notes.strip():  # لو كتب ملاحظات جديدة
+        else:
             if col4.button("⬅️ رجوع للنشطة", key=f"to_active_{i}"):
-                complaints_sheet.append_row([comp_id, comp_type, new_notes, "", date_added, restored])
+                complaints_sheet.append_row([comp_id, comp_type, new_notes, new_action, date_added, restored])
                 sheet.delete_rows(i)
                 st.success("✅ اتنقلت تاني لقائمة النشطة")
                 st.rerun()
+
+# ====== 1. البحث ======
+st.header("🔍 البحث عن شكوى")
+search_id = st.text_input("🆔 اكتب رقم الشكوى")
 
 if st.button("🔍 بحث"):
     if search_id.strip():
@@ -125,7 +129,6 @@ with st.form("add_complaint", clear_on_submit=True):
 
 # ====== 3. عرض الشكاوى النشطة ======
 st.header("📋 الشكاوى النشطة (بدون إجراء):")
-
 active_notes = complaints_sheet.get_all_values()
 if len(active_notes) > 1:
     for i, row in enumerate(active_notes[1:], start=2):
@@ -135,7 +138,6 @@ else:
 
 # ====== 4. عرض الإجراءات المردودة ======
 st.header("✅ الإجراءات المردودة:")
-
 responded_notes = responded_sheet.get_all_values()
 if len(responded_notes) > 1:
     for i, row in enumerate(responded_notes[1:], start=2):
@@ -145,7 +147,6 @@ else:
 
 # ====== 5. عرض الأرشيف ======
 st.header("📦 الأرشيف (الشكاوى المحلولة):")
-
 archived = archive_sheet.get_all_values()
 if len(archived) > 1:
     for row in archived[1:]:
@@ -160,7 +161,6 @@ else:
 
 # ====== 6. معلق ارامكس ======
 st.header("🚚 معلق ارامكس")
-
 with st.form("add_aramex", clear_on_submit=True):
     order_id = st.text_input("🔢 رقم الطلب")
     status = st.text_input("📌 الحالة")
@@ -169,20 +169,19 @@ with st.form("add_aramex", clear_on_submit=True):
     
     if submitted:
         if order_id.strip() and status.strip() and action.strip():
-            date_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")  # ✅ أوتوماتيك
+            date_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             aramex_sheet.append_row([order_id, status, date_now, action])
             st.success("✅ تم تسجيل الطلب")
             st.rerun()
         else:
             st.error("⚠️ لازم تدخل رقم الطلب + الحالة + الإجراء")
 
-# عرض الطلبات
+# عرض الطلبات المعلقة
 st.subheader("📋 قائمة الطلبات المعلقة")
 aramex_data = aramex_sheet.get_all_values()
 if len(aramex_data) > 1:
     for i, row in enumerate(aramex_data[1:], start=2):
         order_id, status, date_added, action = row[:4]
-        
         with st.expander(f"📦 طلب {order_id} | 📌 {status} | 📅 {date_added}"):
             st.write(f"📌 الحالة الحالية: {status}")
             st.write(f"✅ الإجراء الحالي: {action}")
