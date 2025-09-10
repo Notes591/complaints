@@ -16,7 +16,6 @@ client = gspread.authorize(creds)
 # ====== أوراق جوجل شيت ======
 SHEET_NAME = "Complaints"
 
-# Retry عند فتح الأوراق لتجنب APIError
 def open_sheet(title):
     for _ in range(5):
         try:
@@ -77,17 +76,21 @@ def render_complaint(sheet, i, row, in_responded=False):
     restored = row[5] if len(row) > 5 else ""
 
     with st.expander(f"🆔 {comp_id} | 📌 {comp_type} | 📅 {date_added} {restored}"):
-        st.write(f"📌 النوع: {comp_type}")
+        st.write(f"📌 النوع الحالي: {comp_type}")
         st.write(f"📝 الملاحظات: {notes}")
         st.write(f"✅ الإجراء: {action}")
         st.caption(f"📅 تاريخ التسجيل: {date_added}")
 
+        # حقل لتعديل النوع
+        new_type = st.selectbox("📌 عدل نوع الشكوى", ["اختر نوع الشكوى..."] + types_list, index=(types_list.index(comp_type)+1 if comp_type in types_list else 0), key=f"type_{i}_{sheet.title}")
         new_notes = st.text_area("✏️ عدل الملاحظات", value=notes, key=f"notes_{i}_{sheet.title}")
         new_action = st.text_area("✏️ عدل الإجراء", value=action, key=f"action_{i}_{sheet.title}")
 
         col1, col2, col3, col4 = st.columns(4)
 
         if col1.button("💾 حفظ", key=f"save_{i}_{sheet.title}"):
+            if new_type != "اختر نوع الشكوى...":
+                safe_update(sheet, f"B{i}", [[new_type]])
             safe_update(sheet, f"C{i}", [[new_notes]])
             safe_update(sheet, f"D{i}", [[new_action]])
             st.success("✅ تم التعديل")
@@ -99,21 +102,20 @@ def render_complaint(sheet, i, row, in_responded=False):
             st.rerun()
 
         if col3.button("📦 أرشفة", key=f"archive_{i}_{sheet.title}"):
-            safe_append(archive_sheet, [comp_id, comp_type, new_notes, new_action, date_added, restored])
+            safe_append(archive_sheet, [comp_id, new_type, new_notes, new_action, date_added, restored])
             safe_delete(sheet, i)
             st.success("♻️ الشكوى انتقلت للأرشيف")
             st.rerun()
 
-        # أزرار النقل دائمًا ظاهرة
         if not in_responded:
             if col4.button("➡️ نقل للإجراءات المردودة", key=f"to_responded_{i}"):
-                safe_append(responded_sheet, [comp_id, comp_type, new_notes, new_action, date_added, restored])
+                safe_append(responded_sheet, [comp_id, new_type, new_notes, new_action, date_added, restored])
                 safe_delete(sheet, i)
                 st.success("✅ اتنقلت للإجراءات المردودة")
                 st.rerun()
         else:
             if col4.button("⬅️ رجوع للنشطة", key=f"to_active_{i}"):
-                safe_append(complaints_sheet, [comp_id, comp_type, new_notes, new_action, date_added, restored])
+                safe_append(complaints_sheet, [comp_id, new_type, new_notes, new_action, date_added, restored])
                 safe_delete(sheet, i)
                 st.success("✅ اتنقلت للنشطة")
                 st.rerun()
@@ -155,12 +157,12 @@ with st.form("add_complaint", clear_on_submit=True):
             if comp_id in all_active_ids:
                 st.error("⚠️ الشكوى موجودة بالفعل في النشطة أو المردودة")
             elif comp_id in all_archive_ids:
-                # استرجاع من الأرشيف
                 for idx, row in enumerate(archive_sheet.get_all_values()[1:], start=2):
                     if str(row[0]) == comp_id:
                         restored_notes = row[2]
                         restored_action = row[3]
-                        safe_append(complaints_sheet, [comp_id, comp_type, restored_notes, restored_action, date_now, "🔄 مسترجعة"])
+                        restored_type = row[1]
+                        safe_append(complaints_sheet, [comp_id, restored_type, restored_notes, restored_action, date_now, "🔄 مسترجعة"])
                         safe_delete(archive_sheet, idx)
                         st.success("✅ الشكوى كانت في الأرشيف وتمت إعادتها للنشطة")
                         st.rerun()
