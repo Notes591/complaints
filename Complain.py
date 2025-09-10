@@ -6,10 +6,8 @@ import time
 import gspread.exceptions
 
 # ====== الاتصال بجوجل شيت ======
-scope = [
-    "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/drive"
-]
+scope = ["https://www.googleapis.com/auth/spreadsheets",
+         "https://www.googleapis.com/auth/drive"]
 
 creds_dict = st.secrets["gcp_service_account"]
 creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
@@ -123,7 +121,6 @@ def render_complaint(sheet, i, row, in_responded=False):
 # ====== البحث عن شكوى ======
 st.header("🔍 البحث عن شكوى")
 search_id = st.text_input("🆔 اكتب رقم الشكوى")
-
 if st.button("🔍 بحث"):
     if search_id.strip():
         found = False
@@ -151,6 +148,7 @@ with st.form("add_complaint", clear_on_submit=True):
             responded = responded_sheet.get_all_records()
             archive = archive_sheet.get_all_records()
             date_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
             all_active_ids = [str(c["ID"]) for c in complaints] + [str(r["ID"]) for r in responded]
             all_archive_ids = [str(a["ID"]) for a in archive]
 
