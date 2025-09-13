@@ -76,26 +76,27 @@ def render_complaint(sheet, i, row, in_responded=False):
         st.caption(f"📅 تاريخ التسجيل: {date_added}")
 
         # تعديل النوع
-        new_type = st.selectbox("✏️ عدل نوع الشكوى", [comp_type] + [t for t in types_list if t != comp_type],
-                                index=0, key=f"type_{i}_{sheet.title}")
-        new_notes = st.text_area("✏️ عدل الملاحظات", value=notes, key=f"notes_{i}_{sheet.title}")
-        new_action = st.text_area("✏️ عدل الإجراء", value=action, key=f"action_{i}_{sheet.title}")
+        new_type = st.selectbox("✏️ عدل نوع الشكوى",
+                                [comp_type] + [t for t in types_list if t != comp_type],
+                                index=0, key=f"type_{comp_id}_{sheet.title}")
+        new_notes = st.text_area("✏️ عدل الملاحظات", value=notes, key=f"notes_{comp_id}_{sheet.title}")
+        new_action = st.text_area("✏️ عدل الإجراء", value=action, key=f"action_{comp_id}_{sheet.title}")
 
         col1, col2, col3, col4 = st.columns(4)
 
-        if col1.button("💾 حفظ", key=f"save_{i}_{sheet.title}"):
+        if col1.button("💾 حفظ", key=f"save_{comp_id}_{sheet.title}"):
             safe_update(sheet, f"B{i}", [[new_type]])  # تحديث النوع
             safe_update(sheet, f"C{i}", [[new_notes]])
             safe_update(sheet, f"D{i}", [[new_action]])
             st.success("✅ تم التعديل")
             st.rerun()
 
-        if col2.button("🗑️ حذف", key=f"delete_{i}_{sheet.title}"):
+        if col2.button("🗑️ حذف", key=f"delete_{comp_id}_{sheet.title}"):
             safe_delete(sheet, i)
             st.warning("🗑️ تم حذف الشكوى")
             st.rerun()
 
-        if col3.button("📦 أرشفة", key=f"archive_{i}_{sheet.title}"):
+        if col3.button("📦 أرشفة", key=f"archive_{comp_id}_{sheet.title}"):
             safe_append(archive_sheet, [comp_id, new_type, new_notes, new_action, date_added, restored])
             time.sleep(0.5)
             safe_delete(sheet, i)
@@ -103,14 +104,14 @@ def render_complaint(sheet, i, row, in_responded=False):
             st.rerun()
 
         if not in_responded:
-            if col4.button("➡️ نقل للإجراءات المردودة", key=f"to_responded_{i}"):
+            if col4.button("➡️ نقل للإجراءات المردودة", key=f"to_responded_{comp_id}_{sheet.title}"):
                 safe_append(responded_sheet, [comp_id, new_type, new_notes, new_action, date_added, restored])
                 time.sleep(0.5)
                 safe_delete(sheet, i)
                 st.success("✅ اتنقلت للإجراءات المردودة")
                 st.rerun()
         else:
-            if col4.button("⬅️ رجوع للنشطة", key=f"to_active_{i}"):
+            if col4.button("⬅️ رجوع للنشطة", key=f"to_active_{comp_id}_{sheet.title}"):
                 safe_append(complaints_sheet, [comp_id, new_type, new_notes, new_action, date_added, restored])
                 time.sleep(0.5)
                 safe_delete(sheet, i)
@@ -129,7 +130,8 @@ if st.button("🔍 بحث"):
             for i, row in enumerate(data[1:], start=2):
                 if row[0] == search_id:
                     found = True
-                    render_complaint(sheet, i, row, in_responded=(sheet==responded_sheet))
+                    render_complaint(sheet, i, row, in_responded=(sheet == responded_sheet))
+                    st.stop()  # وقف بعد أول نتيجة
         if not found:
             st.error("❌ لم يتم العثور على الشكوى")
 
@@ -202,7 +204,6 @@ if len(archived) > 1:
         comp_id, comp_type, notes, action, date_added = row[:5]
         restored = row[5] if len(row) > 5 else ""
         with st.expander(f"📦 {comp_id} | 📌 {comp_type} | 📅 {date_added} {restored}"):
-            # عرض النوع في الأرشيف فقط (لا تعديل مباشر هنا)
             st.write(f"📌 النوع: {comp_type}")
             st.write(f"✅ الإجراء: {action}")
             st.caption(f"📅 تاريخ التسجيل: {date_added}")
@@ -238,23 +239,23 @@ if len(aramex_data) > 1:
             st.write(f"✅ الإجراء الحالي: {action}")
             st.caption(f"📅 تاريخ الإضافة: {date_added}")
 
-            new_status = st.text_input("✏️ عدل الحالة", value=status, key=f"status_{i}")
-            new_action = st.text_area("✏️ عدل الإجراء", value=action, key=f"action_{i}")
+            new_status = st.text_input("✏️ عدل الحالة", value=status, key=f"status_{order_id}")
+            new_action = st.text_area("✏️ عدل الإجراء", value=action, key=f"action_{order_id}")
 
             col1, col2, col3 = st.columns(3)
 
-            if col1.button("💾 حفظ", key=f"save_aramex_{i}"):
+            if col1.button("💾 حفظ", key=f"save_aramex_{order_id}"):
                 safe_update(aramex_sheet, f"B{i}", [[new_status]])
                 safe_update(aramex_sheet, f"D{i}", [[new_action]])
                 st.success("✅ تم تعديل الطلب")
                 st.rerun()
 
-            if col2.button("🗑️ حذف", key=f"delete_aramex_{i}"):
+            if col2.button("🗑️ حذف", key=f"delete_aramex_{order_id}"):
                 safe_delete(aramex_sheet, i)
                 st.warning("🗑️ تم حذف الطلب")
                 st.rerun()
 
-            if col3.button("📦 أرشفة", key=f"archive_aramex_{i}"):
+            if col3.button("📦 أرشفة", key=f"archive_aramex_{order_id}"):
                 safe_append(aramex_archive, [order_id, new_status, date_added, new_action])
                 time.sleep(0.5)
                 safe_delete(aramex_sheet, i)
