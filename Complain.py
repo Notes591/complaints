@@ -367,12 +367,12 @@ if 'rerun_flag' in st.session_state and st.session_state.rerun_flag:
 
 def check_password():
     """
-    يتحقق من st.secrets['1234'].
+    يتحقق من st.secrets['admin_password'].
     ضع كلمة السر في Streamlit Secrets كـ admin_password.
     """
     def password_entered():
         # تستخدم st.session_state["password"] للمقارنة
-        if st.session_state.get("password") == st.secrets.get("1234"):
+        if st.session_state.get("password") == st.secrets.get("AHMED"):
             st.session_state["password_correct"] = True
         else:
             st.session_state["password_correct"] = False
