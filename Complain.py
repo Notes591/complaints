@@ -4,7 +4,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
 import time
 import requests
-import json
+import xml.etree.ElementTree as ET
 
 # ====== الاتصال بجوجل شيت ======
 scope = ["https://www.googleapis.com/auth/spreadsheets",
@@ -65,7 +65,7 @@ def safe_delete(sheet, row_index, retries=5, delay=1):
     st.error("❌ فشل delete_rows بعد عدة محاولات.")
     return False
 
-# ====== دالة لجلب حالة شحنة أرامكس ======
+# ====== دالة لجلب حالة شحنة أرامكس (XML + JSON fallback) ======
 def get_aramex_status(awb_number):
     if not awb_number.strip():
         return "رقم الشحنة فارغ"
@@ -80,7 +80,7 @@ def get_aramex_status(awb_number):
             "AccountCountryCode": "SA"
         }
 
-        url = "https://ws.aramex.net/ShippingAPI.V2/Tracking/Service_1_0.svc/json/TrackShipments"
+        url = "https://ws.aramex.net/ShippingAPI.V2/Tracking/Service_1_0.svc"
         payload = {
             "ClientInfo": client_info,
             "Transaction": {"Reference1": "12345"},
@@ -88,24 +88,26 @@ def get_aramex_status(awb_number):
             "GetLastUpdateOnly": True
         }
 
-        response = requests.post(url, json=payload, timeout=10)
+        headers = {"Content-Type": "application/json"}
+        response = requests.post(url, json=payload, headers=headers, timeout=10)
 
-        try:
-            data = response.json()
-        except json.JSONDecodeError:
-            return f"خطأ: الرد ليس JSON"
+        if not response.text.strip():
+            return "❌ لم يتم الحصول على رد من أرامكس"
 
-        tracking_results = data.get("TrackingResults", [])
-        if not tracking_results:
+        # محاولة تحويل الرد ل XML
+        root = ET.fromstring(response.text)
+        ns = {'ns': 'http://ws.aramex.net/ShippingAPI/v1/'}
+        track_result = root.find('.//ns:TrackingResult', ns)
+        if track_result is None:
+            return "❌ لم يتم العثور على نتيجة تتبع"
+
+        last_update = track_result.find('.//ns:Update', ns)
+        if last_update is None:
             return "لا توجد حالة متاحة"
 
-        last_update = tracking_results[0].get("Update", [])
-        if not last_update:
-            return "لا توجد حالة متاحة"
-
-        last_status = last_update[-1].get("Status", "غير محددة")
-        last_date = last_update[-1].get("Date", "")
-        return f"{last_status} بتاريخ {last_date}"
+        status = last_update.find('ns:Status', ns)
+        date = last_update.find('ns:Date', ns)
+        return f"{status.text if status is not None else 'غير محددة'} بتاريخ {date.text if date is not None else ''}"
 
     except Exception as e:
         return f"خطأ في جلب الحالة: {e}"
@@ -170,84 +172,3 @@ def render_complaint(sheet, i, row, in_responded=False):
                 safe_delete(sheet, i)
                 st.success("✅ اتنقلت للنشطة")
                 st.rerun()
-
-# ====== البحث عن شكوى ======
-st.header("🔍 البحث عن شكوى")
-search_id = st.text_input("🆔 اكتب رقم الشكوى")
-
-if st.button("🔍 بحث"):
-    if search_id.strip():
-        found = False
-        for sheet in [complaints_sheet, responded_sheet, archive_sheet]:
-            data = sheet.get_all_values()
-            for i, row in enumerate(data[1:], start=2):
-                if row[0] == search_id:
-                    found = True
-                    render_complaint(sheet, i, row, in_responded=(sheet == responded_sheet))
-                    st.stop()
-        if not found:
-            st.error("❌ لم يتم العثور على الشكوى")
-
-# ====== تسجيل شكوى جديدة ======
-st.header("➕ تسجيل شكوى جديدة")
-with st.form("add_complaint", clear_on_submit=True):
-    comp_id = st.text_input("🆔 رقم الشكوى")
-    comp_type = st.selectbox("📌 نوع الشكوى", ["اختر نوع الشكوى..."] + types_list, index=0)
-    notes = st.text_area("📝 ملاحظات الشكوى")
-    action = st.text_area("✅ الإجراء المتخذ")
-    outbound_awb = st.text_input("🚚 Outbound AWB")
-    inbound_awb = st.text_input("📦 Inbound AWB")
-    submitted = st.form_submit_button("➕ إضافة شكوى")
-
-    if submitted:
-        if comp_id.strip() and comp_type != "اختر نوع الشكوى...":
-            complaints = complaints_sheet.get_all_records()
-            responded = responded_sheet.get_all_records()
-            archive = archive_sheet.get_all_records()
-            date_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-            all_active_ids = [str(c["ID"]) for c in complaints] + [str(r["ID"]) for r in responded]
-            all_archive_ids = [str(a["ID"]) for a in archive]
-
-            if comp_id in all_active_ids:
-                st.error("⚠️ الشكوى موجودة بالفعل في النشطة أو المردودة")
-            elif comp_id in all_archive_ids:
-                # إرجاع الشكوى من الأرشيف
-                for idx, row in enumerate(archive_sheet.get_all_values()[1:], start=2):
-                    if str(row[0]) == comp_id:
-                        restored_notes = row[2]
-                        restored_action = row[3]
-                        restored_type = row[1]
-                        restored_outbound = row[6] if len(row) > 6 else ""
-                        restored_inbound = row[7] if len(row) > 7 else ""
-                        if safe_append(complaints_sheet, [comp_id, restored_type, restored_notes, restored_action, date_now, "🔄 مسترجعة", restored_outbound, restored_inbound]):
-                            time.sleep(0.5)
-                            safe_delete(archive_sheet, idx)
-                            st.success("✅ الشكوى كانت في الأرشيف وتمت إعادتها للنشطة")
-                            st.rerun()
-            else:
-                if action.strip():
-                    safe_append(responded_sheet, [comp_id, comp_type, notes, action, date_now, "", outbound_awb, inbound_awb])
-                    st.success("✅ تم تسجيل الشكوى في المردودة")
-                else:
-                    safe_append(complaints_sheet, [comp_id, comp_type, notes, "", date_now, "", outbound_awb, inbound_awb])
-                    st.success("✅ تم تسجيل الشكوى في النشطة")
-                st.rerun()
-
-# ====== عرض الشكاوى النشطة والمردودة والأرشيف ======
-def display_sheet(sheet, in_responded=False):
-    data = sheet.get_all_values()
-    if len(data) <= 1:
-        st.info("لا توجد بيانات حالياً.")
-        return
-    for i, row in enumerate(data[1:], start=2):
-        render_complaint(sheet, i, row, in_responded=in_responded)
-
-st.header("📋 الشكاوى النشطة:")
-display_sheet(complaints_sheet, in_responded=False)
-
-st.header("✅ الإجراءات المردودة:")
-display_sheet(responded_sheet, in_responded=True)
-
-st.header("📦 الأرشيف:")
-display_sheet(archive_sheet, in_responded=False)
