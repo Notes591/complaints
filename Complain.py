@@ -145,6 +145,36 @@ def get_aramex_status(awb_number, search_type="Waybill"):
     except Exception as e:
         return f"خطأ في جلب الحالة: {e}"
 
+# ====== Access: جلب بيانات العميل بطريقة آمنة ======
+import pyodbc
+
+def get_client_info_safe(order_number):
+    try:
+        access_db_path = r"C:\Users\ASUS\Dropbox\Share For All - Dropbox\Home Lamasat-هوم لمسات.accdb"
+        conn_str = (
+            r'DRIVER={Microsoft Access Driver (*.mdb, *.accdb)};'
+            rf'DBQ={access_db_path};'
+        )
+        conn = pyodbc.connect(conn_str, timeout=5)
+        cursor = conn.cursor()
+        sql = "SELECT [Order Number], [First Name (Billing)], [Phone (Billing)], [MAIL], [City (Billing)], [PostalCode], [CountryCode], [منتجات] FROM Orders WHERE [Order Number] = ?"
+        cursor.execute(sql, (order_number,))
+        row = cursor.fetchone()
+        if row:
+            return {
+                "Order Number": row[0],
+                "First Name": row[1],
+                "Phone": row[2],
+                "Email": row[3],
+                "City": row[4],
+                "PostalCode": row[5],
+                "CountryCode": row[6],
+                "Products": row[7]
+            }
+    except Exception:
+        return None
+    return None
+
 # ====== دالة عرض الشكوى مع إدارة إعادة التشغيل ======
 def render_complaint(sheet, i, row, in_responded=False):
     if 'rerun_flag' not in st.session_state:
@@ -160,6 +190,13 @@ def render_complaint(sheet, i, row, in_responded=False):
         st.write(f"📝 الملاحظات: {notes}")
         st.write(f"✅ الإجراء: {action}")
         st.caption(f"📅 تاريخ التسجيل: {date_added}")
+
+        # ====== عرض بيانات العميل من Access ======
+        client_info = get_client_info_safe(int(comp_id)) if comp_id.isdigit() else None
+        if client_info:
+            st.subheader("👤 بيانات العميل من Access")
+            for key, value in client_info.items():
+                st.write(f"{key}: {value}")
 
         new_type = st.selectbox("✏️ عدل نوع الشكوى", [comp_type] + [t for t in types_list if t != comp_type], index=0, key=f"type_{comp_id}_{sheet.title}")
         new_notes = st.text_area("✏️ عدل الملاحظات", value=notes, key=f"notes_{comp_id}_{sheet.title}")
