@@ -145,8 +145,11 @@ def get_aramex_status(awb_number, search_type="Waybill"):
     except Exception as e:
         return f"خطأ في جلب الحالة: {e}"
 
-# ====== دالة عرض الشكوى مع تحديث دائم للحالات ======
+# ====== دالة عرض الشكوى مع إدارة إعادة التشغيل ======
 def render_complaint(sheet, i, row, in_responded=False):
+    if 'rerun_flag' not in st.session_state:
+        st.session_state.rerun_flag = False
+
     comp_id, comp_type, notes, action, date_added = row[:5]
     restored = row[5] if len(row) > 5 else ""
     outbound_awb = row[6] if len(row) > 6 else ""
@@ -180,31 +183,34 @@ def render_complaint(sheet, i, row, in_responded=False):
             safe_update(sheet, f"G{i}", [[new_outbound]])
             safe_update(sheet, f"H{i}", [[new_inbound]])
             st.success("✅ تم التعديل")
-            st.experimental_rerun()
+            st.session_state.rerun_flag = True
+
         if col2.button("🗑️ حذف", key=f"delete_{comp_id}_{sheet.title}"):
             safe_delete(sheet, i)
             st.warning("🗑️ تم حذف الشكوى")
-            st.experimental_rerun()
+            st.session_state.rerun_flag = True
+
         if col3.button("📦 أرشفة", key=f"archive_{comp_id}_{sheet.title}"):
             safe_append(archive_sheet, [comp_id, new_type, new_notes, new_action, date_added, restored, new_outbound, new_inbound])
             time.sleep(0.5)
             safe_delete(sheet, i)
             st.success("♻️ الشكوى انتقلت للأرشيف")
-            st.experimental_rerun()
+            st.session_state.rerun_flag = True
+
         if not in_responded:
             if col4.button("➡️ نقل للإجراءات المردودة", key=f"to_responded_{comp_id}_{sheet.title}"):
                 safe_append(responded_sheet, [comp_id, new_type, new_notes, new_action, date_added, restored, new_outbound, new_inbound])
                 time.sleep(0.5)
                 safe_delete(sheet, i)
                 st.success("✅ اتنقلت للإجراءات المردودة")
-                st.experimental_rerun()
+                st.session_state.rerun_flag = True
         else:
             if col4.button("⬅️ رجوع للنشطة", key=f"to_active_{comp_id}_{sheet.title}"):
                 safe_append(complaints_sheet, [comp_id, new_type, new_notes, new_action, date_added, restored, new_outbound, new_inbound])
                 time.sleep(0.5)
                 safe_delete(sheet, i)
                 st.success("✅ اتنقلت للنشطة")
-                st.experimental_rerun()
+                st.session_state.rerun_flag = True
 
 # ====== البحث عن شكوى ======
 st.header("🔍 البحث عن شكوى")
@@ -218,7 +224,7 @@ if st.button("🔍 بحث"):
                 if row[0] == search_id:
                     found = True
                     render_complaint(sheet, i, row, in_responded=(sheet == responded_sheet))
-                    st.stop()
+                    break
         if not found:
             st.error("❌ لم يتم العثور على الشكوى")
 
@@ -256,7 +262,7 @@ with st.form("add_complaint", clear_on_submit=True):
                             time.sleep(0.5)
                             safe_delete(archive_sheet, idx)
                             st.success("✅ الشكوى كانت في الأرشيف وتمت إعادتها للنشطة")
-                            st.experimental_rerun()
+                            st.session_state.rerun_flag = True
             else:
                 if action.strip():
                     safe_append(responded_sheet, [comp_id, comp_type, notes, action, date_now, "", outbound_awb, inbound_awb])
@@ -264,7 +270,7 @@ with st.form("add_complaint", clear_on_submit=True):
                 else:
                     safe_append(complaints_sheet, [comp_id, comp_type, notes, "", date_now, "", outbound_awb, inbound_awb])
                     st.success("✅ تم تسجيل الشكوى في النشطة")
-                st.experimental_rerun()
+                st.session_state.rerun_flag = True
 
 # ====== عرض الشكاوى النشطة ======
 st.header("📋 الشكاوى النشطة:")
@@ -314,7 +320,7 @@ with st.form("add_aramex", clear_on_submit=True):
             date_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             safe_append(aramex_sheet, [order_id, status, date_now, action])
             st.success("✅ تم تسجيل الطلب")
-            st.experimental_rerun()
+            st.session_state.rerun_flag = True
         else:
             st.error("⚠️ لازم تدخل رقم الطلب + الحالة + الإجراء")
 
@@ -334,14 +340,19 @@ if len(aramex_data) > 1:
                 safe_update(aramex_sheet, f"B{i}", [[new_status]])
                 safe_update(aramex_sheet, f"D{i}", [[new_action]])
                 st.success("✅ تم تعديل الطلب")
-                st.experimental_rerun()
+                st.session_state.rerun_flag = True
             if col2.button("🗑️ حذف", key=f"delete_aramex_{order_id}"):
                 safe_delete(aramex_sheet, i)
                 st.warning("🗑️ تم حذف الطلب")
-                st.experimental_rerun()
+                st.session_state.rerun_flag = True
             if col3.button("📦 أرشفة", key=f"archive_aramex_{order_id}"):
                 safe_append(aramex_archive, [order_id, new_status, date_added, new_action])
                 time.sleep(0.5)
                 safe_delete(aramex_sheet, i)
                 st.success("♻️ تم أرشفة الطلب")
-                st.experimental_rerun()
+                st.session_state.rerun_flag = True
+
+# ====== إعادة التشغيل إذا تم تعديل أي شيء ======
+if 'rerun_flag' in st.session_state and st.session_state.rerun_flag:
+    st.session_state.rerun_flag = False
+    st.experimental_rerun()
