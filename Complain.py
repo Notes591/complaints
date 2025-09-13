@@ -5,8 +5,11 @@ from datetime import datetime
 import time
 import gspread.exceptions
 import requests
+import xml.etree.ElementTree as ET
+import re
+import pandas as pd
 
-# ====== الاتصال بجوجل شيت ======
+# ====== إعدادات الاتصال بجوجل شيت ======
 scope = ["https://www.googleapis.com/auth/spreadsheets",
          "https://www.googleapis.com/auth/drive"]
 
@@ -27,14 +30,14 @@ types_sheet = sheets_dict["Types"]
 aramex_sheet = sheets_dict["معلق ارامكس"]
 aramex_archive = sheets_dict["أرشيف أرامكس"]
 
-# ====== إعدادات الصفحة ======
+# ====== إعدادات صفحة Streamlit ======
 st.set_page_config(page_title="📢 نظام الشكاوى", page_icon="⚠️")
 st.title("⚠️ نظام إدارة الشكاوى")
 
-# تحميل الأنواع
+# ====== تحميل أنواع الشكاوى ======
 types_list = [row[0] for row in types_sheet.get_all_values()[1:]]
 
-# ====== دوال Retry ======
+# ====== دوال Retry للعمليات على الشيت ======
 def safe_append(sheet, row_data, retries=5, delay=1):
     for attempt in range(retries):
         try:
@@ -65,37 +68,64 @@ def safe_delete(sheet, row_index, retries=5, delay=1):
     st.error("❌ فشل delete_rows بعد عدة محاولات.")
     return False
 
-# ====== دالة لجلب حالة الشحنة من أرامكس ======
-def get_aramex_status(awb_number):
-    client_info = {
-        "UserName": "fitnessworld525@gmail.com",
-        "Password": "Aa12345678@",
-        "Version": "v1",
-        "AccountNumber": "71958996",
-        "AccountPin": "657448",
-        "AccountEntity": "RUH",
-        "AccountCountryCode": "SA"
-    }
+# ====== دوال التعامل مع أرامكس ======
+client_info = {
+    "UserName": "fitnessworld525@gmail.com",
+    "Password": "Aa12345678@",
+    "Version": "v1",
+    "AccountNumber": "71958996",
+    "AccountPin": "657448",
+    "AccountEntity": "RUH",
+    "AccountCountryCode": "SA"
+}
 
-    url = "https://ws.aramex.net/ShippingAPI.V2/Tracking/Service_1_0.svc/json/TrackShipments"
+def remove_xml_namespaces(xml_str):
+    xml_str = re.sub(r'xmlns(:\w+)?="[^"]+"', '', xml_str)
+    xml_str = re.sub(r'(<\/?)(\w+:)', r'\1', xml_str)
+    return xml_str
+
+def extract_reference(tracking_result):
+    for ref_tag in ['Reference1', 'Reference2', 'Reference3', 'Reference4', 'Reference5']:
+        ref_elem = tracking_result.find(ref_tag)
+        if ref_elem is not None and ref_elem.text and ref_elem.text.strip() != "":
+            return ref_elem.text.strip()
+    return ""
+
+def get_aramex_status(awb_number):
     headers = {"Content-Type": "application/json"}
+    url = "https://ws.aramex.net/ShippingAPI.V2/Tracking/Service_1_0.svc/json/TrackShipments"
     payload = {
         "ClientInfo": client_info,
-        "Transaction": {"Reference1": "12345"},
+        "Transaction": {"Reference1": ""},
         "Shipments": [awb_number],
         "GetLastUpdateOnly": True
     }
 
     try:
         response = requests.post(url, json=payload, headers=headers, timeout=10)
-        data = response.json()
-        if "TrackingResults" in data and len(data["TrackingResults"]) > 0:
-            result = data["TrackingResults"][0]
-            if "Update" in result and len(result["Update"]) > 0:
-                last_update = result["Update"][-1]
-                status = last_update.get("Status", "غير محددة")
-                date = last_update.get("Date", "")
-                return f"{status} بتاريخ {date}"
+        if response.status_code != 200:
+            return f"❌ فشل الاتصال - كود {response.status_code}"
+
+        xml_content = response.content.decode('utf-8')
+        xml_content = remove_xml_namespaces(xml_content)
+        root = ET.fromstring(xml_content)
+
+        tracking_results = root.find('TrackingResults')
+        if tracking_results is None:
+            return "❌ لم يتم العثور على نتائج التتبع"
+
+        for keyvalue in tracking_results.findall('KeyValueOfstringArrayOfTrackingResultmFAkxlpY'):
+            tracking_array = keyvalue.find('Value')
+            if tracking_array is not None:
+                tracks = tracking_array.findall('TrackingResult')
+                if tracks:
+                    tracks_sorted = sorted(tracks, key=lambda tr: tr.find('UpdateDateTime').text if tr.find('UpdateDateTime') is not None else '', reverse=True)
+                    last_track = tracks_sorted[0]
+                    desc = last_track.find('UpdateDescription').text if last_track.find('UpdateDescription') is not None else '—'
+                    date = last_track.find('UpdateDateTime').text if last_track.find('UpdateDateTime') is not None else '—'
+                    loc = last_track.find('UpdateLocation').text if last_track.find('UpdateLocation') is not None else '—'
+                    return f"{desc} بتاريخ {date} | الموقع: {loc}"
+
         return "لا توجد حالة متاحة"
     except Exception as e:
         return f"خطأ في جلب الحالة: {e}"
@@ -113,7 +143,6 @@ def render_complaint(sheet, i, row, in_responded=False):
         st.write(f"✅ الإجراء: {action}")
         st.caption(f"📅 تاريخ التسجيل: {date_added}")
 
-        # تعديل النوع والملاحظات والإجراء والأعمدة الجديدة
         new_type = st.selectbox("✏️ عدل نوع الشكوى",
                                 [comp_type] + [t for t in types_list if t != comp_type],
                                 index=0, key=f"type_{comp_id}_{sheet.title}")
@@ -122,7 +151,6 @@ def render_complaint(sheet, i, row, in_responded=False):
         new_outbound = st.text_input("✏️ Outbound AWB", value=outbound_awb, key=f"outbound_{comp_id}_{sheet.title}")
         new_inbound = st.text_input("✏️ Inbound AWB", value=inbound_awb, key=f"inbound_{comp_id}_{sheet.title}")
 
-        # عرض حالة الشحنة
         if new_outbound:
             status_out = get_aramex_status(new_outbound)
             st.info(f"🚚 حالة الشحنة (Outbound): {status_out}")
@@ -195,7 +223,7 @@ with st.form("add_complaint", clear_on_submit=True):
     action = st.text_area("✅ الإجراء المتخذ")
     outbound_awb = st.text_input("✏️ Outbound AWB")
     inbound_awb = st.text_input("✏️ Inbound AWB")
-    submitted = st.form_submit_button("➕ إضافة شكوى")
+    submitted = st.form_submit_button("➕ إضافة")
 
     if submitted:
         if comp_id.strip() and comp_type != "اختر نوع الشكوى...":
@@ -210,7 +238,6 @@ with st.form("add_complaint", clear_on_submit=True):
             if comp_id in all_active_ids:
                 st.error("⚠️ الشكوى موجودة بالفعل في النشطة أو المردودة")
             elif comp_id in all_archive_ids:
-                # إرجاع الشكوى من الأرشيف
                 for idx, row in enumerate(archive_sheet.get_all_values()[1:], start=2):
                     if str(row[0]) == comp_id:
                         restored_notes = row[2]
@@ -234,7 +261,7 @@ with st.form("add_complaint", clear_on_submit=True):
         else:
             st.error("⚠️ لازم تدخل رقم شكوى وتختار نوع")
 
-# ====== عرض الشكاوى النشطة ======
+# ====== عرض الشكاوى النشطة والمردودة والأرشيف ======
 st.header("📋 الشكاوى النشطة:")
 active_notes = complaints_sheet.get_all_values()
 if len(active_notes) > 1:
@@ -288,7 +315,6 @@ with st.form("add_aramex", clear_on_submit=True):
         else:
             st.error("⚠️ لازم تدخل رقم الطلب + الحالة + الإجراء")
 
-# عرض الطلبات المعلقة
 st.subheader("📋 قائمة الطلبات المعلقة")
 aramex_data = aramex_sheet.get_all_values()
 if len(aramex_data) > 1:
