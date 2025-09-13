@@ -65,7 +65,7 @@ def safe_delete(sheet, row_index, retries=5, delay=1):
     st.error("❌ فشل delete_rows بعد عدة محاولات.")
     return False
 
-# ====== دالة لجلب حالة شحنة أرامكس (XML + JSON fallback) ======
+# ====== دالة لجلب حالة شحنة أرامكس ======
 def get_aramex_status(awb_number):
     if not awb_number.strip():
         return "رقم الشحنة فارغ"
@@ -172,3 +172,101 @@ def render_complaint(sheet, i, row, in_responded=False):
                 safe_delete(sheet, i)
                 st.success("✅ اتنقلت للنشطة")
                 st.rerun()
+
+# ====== البحث عن شكوى ======
+st.header("🔍 البحث عن شكوى")
+search_id = st.text_input("🆔 اكتب رقم الشكوى")
+
+if st.button("🔍 بحث"):
+    if search_id.strip():
+        found = False
+        for sheet in [complaints_sheet, responded_sheet, archive_sheet]:
+            data = sheet.get_all_values()
+            for i, row in enumerate(data[1:], start=2):
+                if row[0] == search_id:
+                    found = True
+                    render_complaint(sheet, i, row, in_responded=(sheet == responded_sheet))
+                    st.stop()
+        if not found:
+            st.error("❌ لم يتم العثور على الشكوى")
+
+# ====== تسجيل شكوى جديدة ======
+st.header("➕ تسجيل شكوى جديدة")
+with st.form("add_complaint", clear_on_submit=True):
+    comp_id = st.text_input("🆔 رقم الشكوى")
+    comp_type = st.selectbox("📌 نوع الشكوى", ["اختر نوع الشكوى..."] + types_list, index=0)
+    notes = st.text_area("📝 ملاحظات الشكوى")
+    action = st.text_area("✅ الإجراء المتخذ")
+    outbound_awb = st.text_input("🚚 رقم شحنة OutboundAWB")
+    inbound_awb = st.text_input("📦 رقم شحنة InboundAWB")
+    submitted = st.form_submit_button("➕ إضافة شكوى")
+
+    if submitted:
+        if comp_id.strip() and comp_type != "اختر نوع الشكوى...":
+            complaints = complaints_sheet.get_all_records()
+            responded = responded_sheet.get_all_records()
+            archive = archive_sheet.get_all_records()
+            date_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            all_active_ids = [str(c["ID"]) for c in complaints] + [str(r["ID"]) for r in responded]
+            all_archive_ids = [str(a["ID"]) for a in archive]
+
+            if comp_id in all_active_ids:
+                st.error("⚠️ الشكوى موجودة بالفعل في النشطة أو المردودة")
+            elif comp_id in all_archive_ids:
+                for idx, row in enumerate(archive_sheet.get_all_values()[1:], start=2):
+                    if str(row[0]) == comp_id:
+                        restored_notes = row[2]
+                        restored_action = row[3]
+                        restored_type = row[1]
+                        restored_outbound = row[6] if len(row) > 6 else ""
+                        restored_inbound = row[7] if len(row) > 7 else ""
+                        if safe_append(complaints_sheet, [comp_id, restored_type, restored_notes, restored_action, date_now, "🔄 مسترجعة", restored_outbound, restored_inbound]):
+                            time.sleep(0.5)
+                            safe_delete(archive_sheet, idx)
+                            st.success("✅ الشكوى كانت في الأرشيف وتمت إعادتها للنشطة")
+                            st.rerun()
+            else:
+                if action.strip():
+                    safe_append(responded_sheet, [comp_id, comp_type, notes, action, date_now, "", outbound_awb, inbound_awb])
+                    st.success("✅ تم تسجيل الشكوى في المردودة")
+                else:
+                    safe_append(complaints_sheet, [comp_id, comp_type, notes, "", date_now, "", outbound_awb, inbound_awb])
+                    st.success("✅ تم تسجيل الشكوى في النشطة")
+                st.rerun()
+        else:
+            st.error("⚠️ لازم تدخل رقم شكوى وتختار نوع")
+
+# ====== عرض الشكاوى النشطة والمردودة والأرشيف ======
+def display_sheet(sheet, in_responded=False):
+    data = sheet.get_all_values()
+    if len(data) <= 1:
+        st.info("لا توجد بيانات حالياً.")
+        return
+    for i, row in enumerate(data[1:], start=2):
+        render_complaint(sheet, i, row, in_responded=in_responded)
+
+st.header("📋 الشكاوى النشطة:")
+display_sheet(complaints_sheet, in_responded=False)
+
+st.header("✅ الإجراءات المردودة:")
+display_sheet(responded_sheet, in_responded=True)
+
+st.header("📦 الأرشيف:")
+display_sheet(archive_sheet, in_responded=False)
+
+# ====== معلق أرامكس ======
+st.header("🚚 معلق ارامكس")
+with st.form("add_aramex"):
+    comp_id = st.text_input("🆔 رقم الشكوى (أرامكس)")
+    outbound_awb = st.text_input("🚚 Outbound AWB")
+    inbound_awb = st.text_input("📦 Inbound AWB")
+    submitted = st.form_submit_button("➕ إضافة")
+    if submitted:
+        if comp_id.strip() and (outbound_awb.strip() or inbound_awb.strip()):
+            date_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            safe_append(aramex_sheet, [comp_id, outbound_awb, inbound_awb, date_now])
+            st.success("✅ تم إضافة الشكوى لمعلق أرامكس")
+            st.rerun()
+        else:
+            st.error("⚠️ مطلوب رقم شكوى ورقم شحنة واحد على الأقل")
