@@ -10,7 +10,7 @@ import re
 from streamlit_autorefresh import st_autorefresh
 
 # ====== تحديث تلقائي كل 60 ثانية ======
-st_autorefresh(interval=180*1000, key="auto_refresh")  # 60 ثانية
+st_autorefresh(interval=360*1000, key="auto_refresh")  # 60 ثانية
 
 # ====== الاتصال بجوجل شيت ======
 scope = ["https://www.googleapis.com/auth/spreadsheets",
