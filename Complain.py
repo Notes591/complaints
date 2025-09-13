@@ -372,7 +372,7 @@ def check_password():
     """
     def password_entered():
         # تستخدم st.session_state["password"] للمقارنة
-        if st.session_state.get("password") == st.secrets.get("admin_password"):
+        if st.session_state.get("password") == st.secrets.get("1234"):
             st.session_state["password_correct"] = True
         else:
             st.session_state["password_correct"] = False
