@@ -13,8 +13,7 @@ from streamlit_autorefresh import st_autorefresh
 st_autorefresh(interval=360*1000, key="auto_refresh")  # 60 ثانية
 
 # ====== الاتصال بجوجل شيت ======
-scope = ["https://www.googleapis.com/auth/spreadsheets",
-         "https://www.googleapis.com/auth/drive"]
+scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
 creds_dict = st.secrets["gcp_service_account"]
 creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
 client = gspread.authorize(creds)
@@ -42,7 +41,6 @@ types_list = [row[0] for row in types_sheet.get_all_values()[1:]]
 
 # ====== بيانات ReturnWarehouse ======
 return_warehouse_data = return_warehouse_sheet.get_all_values()[1:]
-
 def get_returnwarehouse_record(order_id):
     for row in return_warehouse_data:
         if str(row[0]) == str(order_id):
@@ -159,7 +157,6 @@ def get_aramex_status(awb_number, search_type="Waybill"):
                         info += f" | الرقم المرجعي: {reference}"
                     return info
         return "❌ لا توجد حالة متاحة"
-
     except Exception as e:
         return f"خطأ في جلب الحالة: {e}"
 
@@ -239,34 +236,34 @@ def render_complaint(sheet, i, row, in_responded=False):
                     safe_delete(sheet, i)
                     st.success("✅ اتنقلت للنشطة")
 
-# ====== شريط البحث عن الشكوى ======
+# ====== بحث عن الشكوى حسب رقم الشكوى ======
 st.header("🔍 البحث عن شكوى")
 search_id = st.text_input("أدخل رقم الشكوى للبحث")
-
 if search_id.strip():
     found = False
     # البحث في النشطة
-    for i, row in enumerate(complaints_sheet.get_all_values()[1:], start=2):
-        if str(row[0]) == str(search_id):
-            st.success(f"✅ تم العثور على الشكوى في النشطة")
+    active_notes = complaints_sheet.get_all_values()
+    for i, row in enumerate(active_notes[1:], start=2):
+        if str(row[0]) == search_id:
+            st.success(f"✅ الشكوى موجودة في النشطة")
             render_complaint(complaints_sheet, i, row, in_responded=False)
             found = True
             break
-
     # البحث في المردودة
     if not found:
-        for i, row in enumerate(responded_sheet.get_all_values()[1:], start=2):
-            if str(row[0]) == str(search_id):
-                st.success(f"✅ تم العثور على الشكوى في الإجراءات المردودة")
+        responded_notes = responded_sheet.get_all_values()
+        for i, row in enumerate(responded_notes[1:], start=2):
+            if str(row[0]) == search_id:
+                st.success(f"✅ الشكوى موجودة في المردودة")
                 render_complaint(responded_sheet, i, row, in_responded=True)
                 found = True
                 break
-
     # البحث في الأرشيف
     if not found:
-        for row in archive_sheet.get_all_values()[1:]:
-            if str(row[0]) == str(search_id):
-                st.success(f"✅ تم العثور على الشكوى في الأرشيف")
+        archived = archive_sheet.get_all_values()
+        for i, row in enumerate(archived[1:], start=2):
+            if str(row[0]) == search_id:
+                st.success(f"✅ الشكوى موجودة في الأرشيف")
                 comp_id, comp_type, notes, action, date_added = row[:5]
                 restored = row[5] if len(row) > 5 else ""
                 outbound_awb = row[6] if len(row) > 6 else ""
@@ -281,9 +278,8 @@ if search_id.strip():
                         st.info(f"📦 Inbound AWB: {inbound_awb} | الحالة: {get_aramex_status(inbound_awb)}")
                 found = True
                 break
-
     if not found:
-        st.warning("⚠️ لم يتم العثور على الشكوى برقم البحث هذا")
+        st.error("⚠️ لم يتم العثور على الشكوى")
 
 # ====== تسجيل شكوى جديدة ======
 st.header("➕ تسجيل شكوى جديدة")
@@ -398,16 +394,13 @@ if len(aramex_data) > 1:
                 submitted_save = col1.form_submit_button("💾 حفظ")
                 submitted_delete = col2.form_submit_button("🗑️ حذف")
                 submitted_archive = col3.form_submit_button("📦 أرشفة")
-
                 if submitted_save:
                     safe_update(aramex_sheet, f"B{i}", [[new_status]])
                     safe_update(aramex_sheet, f"D{i}", [[new_action]])
                     st.success("✅ تم تعديل الطلب")
-
                 if submitted_delete:
                     safe_delete(aramex_sheet, i)
                     st.warning("🗑️ تم حذف الطلب")
-
                 if submitted_archive:
                     safe_append(aramex_archive, [order_id, new_status, date_added, new_action])
                     safe_delete(aramex_sheet, i)
