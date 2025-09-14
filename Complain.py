@@ -22,7 +22,7 @@ client = gspread.authorize(creds)
 # ====== أوراق جوجل شيت ======
 SHEET_NAME = "Complaints"
 sheets_dict = {}
-for title in ["Complaints", "Responded", "Archive", "Types", "معلق ارامكس", "أرشيف أرامكس"]:
+for title in ["Complaints", "Responded", "Archive", "Types", "معلق ارامكس", "أرشيف أرامكس", "ReturnWarehouse"]:
     sheets_dict[title] = client.open(SHEET_NAME).worksheet(title)
 
 complaints_sheet = sheets_dict["Complaints"]
@@ -31,6 +31,7 @@ archive_sheet = sheets_dict["Archive"]
 types_sheet = sheets_dict["Types"]
 aramex_sheet = sheets_dict["معلق ارامكس"]
 aramex_archive = sheets_dict["أرشيف أرامكس"]
+return_warehouse_sheet = sheets_dict["ReturnWarehouse"]
 
 # ====== إعدادات الصفحة ======
 st.set_page_config(page_title="📢 نظام الشكاوى", page_icon="⚠️")
@@ -38,6 +39,23 @@ st.title("⚠️ نظام إدارة الشكاوى")
 
 # تحميل الأنواع
 types_list = [row[0] for row in types_sheet.get_all_values()[1:]]
+
+# ====== بيانات ReturnWarehouse ======
+return_warehouse_data = return_warehouse_sheet.get_all_values()[1:]
+
+def get_returnwarehouse_record(order_id):
+    for row in return_warehouse_data:
+        if str(row[0]) == str(order_id):
+            return {
+                "رقم الطلب": row[0],
+                "الفاتورة": row[1],
+                "التاريخ": row[2],
+                "الزبون": row[3],
+                "المبلغ": row[4],
+                "رقم الشحنة": row[5],
+                "البيان": row[6]
+            }
+    return None
 
 # ====== دوال Retry ======
 def safe_append(sheet, row_data, retries=5, delay=1):
@@ -159,13 +177,27 @@ def render_complaint(sheet, i, row, in_responded=False):
             st.write(f"✅ الإجراء: {action}")
             st.caption(f"📅 تاريخ التسجيل: {date_added}")
 
+            # ====== بيانات ReturnWarehouse إذا موجودة (فقط المردودة) ======
+            if in_responded:
+                rw_record = get_returnwarehouse_record(comp_id)
+                if rw_record:
+                    st.info(
+                        f"📦 سجل من ReturnWarehouse:\n"
+                        f"رقم الطلب: {rw_record['رقم الطلب']}\n"
+                        f"الفاتورة: {rw_record['الفاتورة']}\n"
+                        f"التاريخ: {rw_record['التاريخ']}\n"
+                        f"الزبون: {rw_record['الزبون']}\n"
+                        f"المبلغ: {rw_record['المبلغ']}\n"
+                        f"رقم الشحنة: {rw_record['رقم الشحنة']}\n"
+                        f"البيان: {rw_record['البيان']}"
+                    )
+
             new_type = st.selectbox("✏️ عدل نوع الشكوى", [comp_type] + [t for t in types_list if t != comp_type], index=0)
             new_notes = st.text_area("✏️ عدل الملاحظات", value=notes)
             new_action = st.text_area("✏️ عدل الإجراء", value=action)
             new_outbound = st.text_input("✏️ Outbound AWB", value=outbound_awb)
             new_inbound = st.text_input("✏️ Inbound AWB", value=inbound_awb)
 
-            # عرض حالة أرامكس بدون تحديث الشيت
             if new_outbound:
                 st.info(f"🚚 Outbound AWB: {new_outbound} | الحالة: {get_aramex_status(new_outbound)}")
             if new_inbound:
