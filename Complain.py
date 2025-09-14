@@ -225,7 +225,7 @@ if st.button("🔍 بحث"):
         if not found:
             st.error("❌ لم يتم العثور على الشكوى")
 
-# ====== تسجيل شكوى جديدة ======
+# ====== تسجيل شكوى جديدة بدون تكرار واسترجاع الأرشيف ======
 st.header("➕ تسجيل شكوى جديدة")
 with st.form("add_complaint", clear_on_submit=True):
     comp_id = st.text_input("🆔 رقم الشكوى")
@@ -237,13 +237,18 @@ with st.form("add_complaint", clear_on_submit=True):
     submitted = st.form_submit_button("➕ إضافة")
 
     if submitted:
-        if comp_id.strip() and comp_type != "اختر نوع الشكوى...":
+        if not comp_id.strip() or comp_type == "اختر نوع الشكوى...":
+            st.error("⚠️ لازم تدخل رقم الشكوى ونوعها")
+        else:
+            # جلب جميع الشكاوى الحالية والمردودة والأرشيف
             complaints = complaints_sheet.get_all_records()
             responded = responded_sheet.get_all_records()
             archive = archive_sheet.get_all_records()
             date_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
             all_active_ids = [str(c["ID"]) for c in complaints] + [str(r["ID"]) for r in responded]
             all_archive_ids = [str(a["ID"]) for a in archive]
+
             if comp_id in all_active_ids:
                 st.error("⚠️ الشكوى موجودة بالفعل في النشطة أو المردودة")
             elif comp_id in all_archive_ids:
@@ -258,15 +263,13 @@ with st.form("add_complaint", clear_on_submit=True):
                         if safe_append(complaints_sheet, [comp_id, restored_type, restored_notes, restored_action, date_now, "🔄 مسترجعة", restored_outbound, restored_inbound]):
                             time.sleep(0.5)
                             safe_delete(archive_sheet, idx)
-                            st.success("✅ الشكوى استُرجعت من الأرشيف")
+                            st.success("✅ الشكوى استُرجعت من الأرشيف وأصبحت نشطة")
                             st.experimental_rerun()
             else:
-                if action.strip():
-                    safe_append(responded_sheet, [comp_id, comp_type, notes, action, date_now, "", outbound_awb, inbound_awb])
-                    st.success("✅ تم تسجيلها في المردودة")
-                else:
-                    safe_append(complaints_sheet, [comp_id, comp_type, notes, "", date_now, "", outbound_awb, inbound_awb])
-                    st.success("✅ تم تسجيلها في النشطة")
+                # إضافة شكوى جديدة
+                target_sheet = responded_sheet if action.strip() else complaints_sheet
+                safe_append(target_sheet, [comp_id, comp_type, notes, action if action.strip() else "", date_now, "", outbound_awb, inbound_awb])
+                st.success(f"✅ تم تسجيل الشكوى في {'المردودة' if action.strip() else 'النشطة'}")
                 st.experimental_rerun()
 
 # ====== عرض الشكاوى النشطة ======
