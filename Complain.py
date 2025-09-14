@@ -239,6 +239,52 @@ def render_complaint(sheet, i, row, in_responded=False):
                     safe_delete(sheet, i)
                     st.success("✅ اتنقلت للنشطة")
 
+# ====== شريط البحث عن الشكوى ======
+st.header("🔍 البحث عن شكوى")
+search_id = st.text_input("أدخل رقم الشكوى للبحث")
+
+if search_id.strip():
+    found = False
+    # البحث في النشطة
+    for i, row in enumerate(complaints_sheet.get_all_values()[1:], start=2):
+        if str(row[0]) == str(search_id):
+            st.success(f"✅ تم العثور على الشكوى في النشطة")
+            render_complaint(complaints_sheet, i, row, in_responded=False)
+            found = True
+            break
+
+    # البحث في المردودة
+    if not found:
+        for i, row in enumerate(responded_sheet.get_all_values()[1:], start=2):
+            if str(row[0]) == str(search_id):
+                st.success(f"✅ تم العثور على الشكوى في الإجراءات المردودة")
+                render_complaint(responded_sheet, i, row, in_responded=True)
+                found = True
+                break
+
+    # البحث في الأرشيف
+    if not found:
+        for row in archive_sheet.get_all_values()[1:]:
+            if str(row[0]) == str(search_id):
+                st.success(f"✅ تم العثور على الشكوى في الأرشيف")
+                comp_id, comp_type, notes, action, date_added = row[:5]
+                restored = row[5] if len(row) > 5 else ""
+                outbound_awb = row[6] if len(row) > 6 else ""
+                inbound_awb = row[7] if len(row) > 7 else ""
+                with st.expander(f"📦 {comp_id} | 📌 {comp_type} | 📅 {date_added} {restored}"):
+                    st.write(f"📌 النوع: {comp_type}")
+                    st.write(f"✅ الإجراء: {action}")
+                    st.caption(f"📅 تاريخ التسجيل: {date_added}")
+                    if outbound_awb:
+                        st.info(f"🚚 Outbound AWB: {outbound_awb} | الحالة: {get_aramex_status(outbound_awb)}")
+                    if inbound_awb:
+                        st.info(f"📦 Inbound AWB: {inbound_awb} | الحالة: {get_aramex_status(inbound_awb)}")
+                found = True
+                break
+
+    if not found:
+        st.warning("⚠️ لم يتم العثور على الشكوى برقم البحث هذا")
+
 # ====== تسجيل شكوى جديدة ======
 st.header("➕ تسجيل شكوى جديدة")
 with st.form("add_complaint", clear_on_submit=True):
