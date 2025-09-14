@@ -250,23 +250,7 @@ with st.form("add_complaint", clear_on_submit=True):
                     safe_append(complaints_sheet, [comp_id, comp_type, notes, "", date_now, "", outbound_awb, inbound_awb])
                     st.success("✅ تم تسجيل الشكوى في النشطة")
 
-# ====== البحث عن شكوى ======
-st.header("🔍 البحث عن شكوى")
-search_id = st.text_input("🆔 اكتب رقم الشكوى")
-if st.button("🔍 بحث"):
-    if search_id.strip():
-        found = False
-        for sheet in [complaints_sheet, responded_sheet, archive_sheet]:
-            data = sheet.get_all_values()
-            for i, row in enumerate(data[1:], start=2):
-                if row[0] == search_id:
-                    found = True
-                    render_complaint(sheet, i, row, in_responded=(sheet == responded_sheet))
-                    break
-        if not found:
-            st.error("❌ لم يتم العثور على الشكوى")
-
-# ====== عرض الشكاوى النشطة والمردودة والأرشيف ======
+# ====== عرض الشكاوى النشطة ======
 st.header("📋 الشكاوى النشطة:")
 active_notes = complaints_sheet.get_all_values()
 if len(active_notes) > 1:
@@ -275,6 +259,7 @@ if len(active_notes) > 1:
 else:
     st.info("لا توجد شكاوى نشطة حالياً.")
 
+# ====== عرض الإجراءات المردودة ======
 st.header("✅ الإجراءات المردودة:")
 responded_notes = responded_sheet.get_all_values()
 if len(responded_notes) > 1:
@@ -283,6 +268,7 @@ if len(responded_notes) > 1:
 else:
     st.info("لا توجد شكاوى مردودة حالياً.")
 
+# ====== عرض الأرشيف ======
 st.header("📦 الأرشيف:")
 archived = archive_sheet.get_all_values()
 if len(archived) > 1:
@@ -317,16 +303,17 @@ with st.form("add_aramex", clear_on_submit=True):
         else:
             st.error("⚠️ لازم تدخل رقم الطلب + الحالة + الإجراء")
 
+# ====== عرض معلق أرامكس ======
 st.subheader("📋 قائمة الطلبات المعلقة")
 aramex_data = aramex_sheet.get_all_values()
 if len(aramex_data) > 1:
     for i, row in enumerate(aramex_data[1:], start=2):
         order_id, status, date_added, action = row[:4]
         with st.expander(f"📦 طلب {order_id}"):
+            st.write(f"📌 الحالة الحالية: {status}")
+            st.write(f"✅ الإجراء الحالي: {action}")
+            st.caption(f"📅 تاريخ الإضافة: {date_added}")
             with st.form(key=f"form_aramex_{order_id}"):
-                st.write(f"📌 الحالة الحالية: {status}")
-                st.write(f"✅ الإجراء الحالي: {action}")
-                st.caption(f"📅 تاريخ الإضافة: {date_added}")
                 new_status = st.text_input("✏️ عدل الحالة", value=status)
                 new_action = st.text_area("✏️ عدل الإجراء", value=action)
                 col1, col2, col3 = st.columns(3)
@@ -338,9 +325,11 @@ if len(aramex_data) > 1:
                     safe_update(aramex_sheet, f"B{i}", [[new_status]])
                     safe_update(aramex_sheet, f"D{i}", [[new_action]])
                     st.success("✅ تم تعديل الطلب")
+
                 if submitted_delete:
                     safe_delete(aramex_sheet, i)
                     st.warning("🗑️ تم حذف الطلب")
+
                 if submitted_archive:
                     safe_append(aramex_archive, [order_id, new_status, date_added, new_action])
                     safe_delete(aramex_sheet, i)
