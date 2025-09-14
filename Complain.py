@@ -36,17 +36,7 @@ aramex_archive = sheets_dict["أرشيف أرامكس"]
 st.set_page_config(page_title="📢 نظام الشكاوى", page_icon="⚠️")
 st.title("⚠️ نظام إدارة الشكاوى")
 
-# ====== دالة إعادة تحميل الصفحة آمنة ======
-def safe_rerun():
-    if "refresh" not in st.session_state:
-        st.session_state["refresh"] = False
-    st.session_state["refresh"] = True
-
-if st.session_state.get("refresh", False):
-    st.session_state["refresh"] = False
-    st.experimental_rerun()
-
-# ====== تحميل الأنواع ======
+# تحميل الأنواع
 types_list = [row[0] for row in types_sheet.get_all_values()[1:]]
 
 # ====== دوال Retry ======
@@ -190,19 +180,19 @@ def render_complaint(sheet, i, row, in_responded=False):
             safe_update(sheet, f"G{i}", [[new_outbound]])
             safe_update(sheet, f"H{i}", [[new_inbound]])
             st.success("✅ تم التعديل")
-            safe_rerun()
+            st.experimental_rerun()
 
         if col2.button("🗑️ حذف", key=f"delete_{comp_id}_{sheet.title}"):
             safe_delete(sheet, i)
             st.warning("🗑️ تم حذف الشكوى")
-            safe_rerun()
+            st.experimental_rerun()
 
         if col3.button("📦 أرشفة", key=f"archive_{comp_id}_{sheet.title}"):
             safe_append(archive_sheet, [comp_id, new_type, new_notes, new_action, date_added, restored, new_outbound, new_inbound])
             time.sleep(0.5)
             safe_delete(sheet, i)
             st.success("♻️ الشكوى انتقلت للأرشيف")
-            safe_rerun()
+            st.experimental_rerun()
 
         if not in_responded:
             if col4.button("➡️ نقل للإجراءات المردودة", key=f"to_responded_{comp_id}_{sheet.title}"):
@@ -210,14 +200,14 @@ def render_complaint(sheet, i, row, in_responded=False):
                 time.sleep(0.5)
                 safe_delete(sheet, i)
                 st.success("✅ اتنقلت للمردودة")
-                safe_rerun()
+                st.experimental_rerun()
         else:
             if col4.button("⬅️ رجوع للنشطة", key=f"to_active_{comp_id}_{sheet.title}"):
                 safe_append(complaints_sheet, [comp_id, new_type, new_notes, new_action, date_added, restored, new_outbound, new_inbound])
                 time.sleep(0.5)
                 safe_delete(sheet, i)
                 st.success("✅ رجعت للنشطة")
-                safe_rerun()
+                st.experimental_rerun()
 
 # ====== البحث عن شكوى ======
 st.header("🔍 البحث عن شكوى")
@@ -261,7 +251,7 @@ with st.form("add_complaint", clear_on_submit=True):
             elif comp_id in all_archive_ids:
                 # استرجاع الشكوى من الأرشيف
                 archive_values = archive_sheet.get_all_values()
-                for i, row in enumerate(archive_values[1:], start=2):
+                for i, row in enumerate(archive_values[1:], start=2):  # يبدأ من الصف 2
                     if str(row[0]) == comp_id:
                         restored_notes = row[2] if len(row) > 2 else ""
                         restored_action = row[3] if len(row) > 3 else ""
@@ -275,7 +265,7 @@ with st.form("add_complaint", clear_on_submit=True):
                             except Exception as e:
                                 st.warning(f"⚠️ فشل حذف الشكوى من الأرشيف: {e}")
                             st.success("✅ الشكوى استُرجعت من الأرشيف وأصبحت نشطة")
-                            safe_rerun()
+                            st.experimental_rerun()
                         break
 
             else:
@@ -285,4 +275,4 @@ with st.form("add_complaint", clear_on_submit=True):
                 else:
                     safe_append(complaints_sheet, [comp_id, comp_type, notes, "", date_now, "", outbound_awb, inbound_awb])
                     st.success("✅ تم تسجيلها في النشطة")
-                safe_rerun()
+                st.experimental_rerun()
