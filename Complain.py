@@ -9,8 +9,8 @@ import xml.etree.ElementTree as ET
 import re
 from streamlit_autorefresh import st_autorefresh
 
-# ====== تحديث تلقائي كل 60 ثانية ======
-st_autorefresh(interval=360*1000, key="auto_refresh")  # 60 ثانية
+# ====== تحديث تلقائي كل 6 دقائق ======
+st_autorefresh(interval=360*1000, key="auto_refresh")  # 360000 ms = 6 دقائق
 
 # ====== الاتصال بجوجل شيت ======
 scope = ["https://www.googleapis.com/auth/spreadsheets",
@@ -36,7 +36,7 @@ aramex_archive = sheets_dict["أرشيف أرامكس"]
 st.set_page_config(page_title="📢 نظام الشكاوى", page_icon="⚠️")
 st.title("⚠️ نظام إدارة الشكاوى")
 
-# تحميل الأنواع
+# ====== تحميل الأنواع ======
 types_list = [row[0] for row in types_sheet.get_all_values()[1:]]
 
 # ====== دوال Retry ======
@@ -145,7 +145,7 @@ def get_aramex_status(awb_number, search_type="Waybill"):
     except Exception as e:
         return f"خطأ في جلب الحالة: {e}"
 
-# ====== دالة عرض الشكوى مع إدارة إعادة التشغيل ======
+# ====== دالة عرض الشكوى ======
 def render_complaint(sheet, i, row, in_responded=False):
     if 'rerun_flag' not in st.session_state:
         st.session_state.rerun_flag = False
@@ -167,7 +167,7 @@ def render_complaint(sheet, i, row, in_responded=False):
         new_outbound = st.text_input("✏️ Outbound AWB", value=outbound_awb, key=f"outbound_{comp_id}_{sheet.title}")
         new_inbound = st.text_input("✏️ Inbound AWB", value=inbound_awb, key=f"inbound_{comp_id}_{sheet.title}")
 
-        # ====== تحديث مباشر لكل حالات أرامكس ======
+        # عرض أرامكس مباشر
         if new_outbound:
             status_out = get_aramex_status(new_outbound)
             st.info(f"🚚 Outbound AWB: {new_outbound} | الحالة: {status_out}")
@@ -214,9 +214,13 @@ def render_complaint(sheet, i, row, in_responded=False):
 
 # ====== البحث عن شكوى ======
 st.header("🔍 البحث عن شكوى")
-search_id = st.text_input("🆔 اكتب رقم الشكوى")
+if 'search_id' not in st.session_state:
+    st.session_state.search_id = ""
+st.session_state.search_id = st.text_input("🆔 اكتب رقم الشكوى", value=st.session_state.search_id)
+
 if st.button("🔍 بحث"):
-    if search_id.strip():
+    search_id = st.session_state.search_id.strip()
+    if search_id:
         found = False
         for sheet in [complaints_sheet, responded_sheet, archive_sheet]:
             data = sheet.get_all_values()
@@ -250,7 +254,6 @@ with st.form("add_complaint", clear_on_submit=True):
             if comp_id in all_active_ids:
                 st.error("⚠️ الشكوى موجودة بالفعل في النشطة أو المردودة")
             elif comp_id in all_archive_ids:
-                # إرجاع الشكوى من الأرشيف
                 for idx, row in enumerate(archive_sheet.get_all_values()[1:], start=2):
                     if str(row[0]) == comp_id:
                         restored_notes = row[2]
@@ -289,18 +292,22 @@ if len(responded_notes) > 1:
 else:
     st.info("لا توجد شكاوى مردودة حالياً.")
 
+# ====== عرض الأرشيف مع أرامكس ======
 st.header("📦 الأرشيف:")
 archived = archive_sheet.get_all_values()
 if len(archived) > 1:
-    for row in archived[1:]:
+    for i, row in enumerate(archived[1:], start=2):
         comp_id, comp_type, notes, action, date_added = row[:5]
         restored = row[5] if len(row) > 5 else ""
         outbound_awb = row[6] if len(row) > 6 else ""
         inbound_awb = row[7] if len(row) > 7 else ""
+
         with st.expander(f"📦 {comp_id} | 📌 {comp_type} | 📅 {date_added} {restored}"):
             st.write(f"📌 النوع: {comp_type}")
             st.write(f"✅ الإجراء: {action}")
+            st.write(f"📝 الملاحظات: {notes}")
             st.caption(f"📅 تاريخ التسجيل: {date_added}")
+
             if outbound_awb:
                 st.info(f"🚚 Outbound AWB: {outbound_awb} | الحالة: {get_aramex_status(outbound_awb)}")
             if inbound_awb:
