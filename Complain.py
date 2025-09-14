@@ -155,60 +155,82 @@ def render_complaint(sheet, i, row, in_responded=False):
     outbound_awb = row[6] if len(row) > 6 else ""
     inbound_awb = row[7] if len(row) > 7 else ""
 
+    keys = {
+        "type": f"type_{comp_id}_{sheet.title}",
+        "notes": f"notes_{comp_id}_{sheet.title}",
+        "action": f"action_{comp_id}_{sheet.title}",
+        "outbound": f"outbound_{comp_id}_{sheet.title}",
+        "inbound": f"inbound_{comp_id}_{sheet.title}"
+    }
+
+    for k, key in keys.items():
+        if key not in st.session_state:
+            if k == "type": st.session_state[key] = comp_type
+            elif k == "notes": st.session_state[key] = notes
+            elif k == "action": st.session_state[key] = action
+            elif k == "outbound": st.session_state[key] = outbound_awb
+            elif k == "inbound": st.session_state[key] = inbound_awb
+
     with st.expander(f"🆔 {comp_id} | 📌 {comp_type} | 📅 {date_added} {restored}"):
-        with st.form(key=f"form_{comp_id}_{sheet.title}", clear_on_submit=False):
-            new_type = st.selectbox("✏️ عدل نوع الشكوى", [comp_type] + [t for t in types_list if t != comp_type], index=0)
-            new_notes = st.text_area("✏️ عدل الملاحظات", value=notes)
-            new_action = st.text_area("✏️ عدل الإجراء", value=action)
-            new_outbound = st.text_input("✏️ Outbound AWB", value=outbound_awb)
-            new_inbound = st.text_input("✏️ Inbound AWB", value=inbound_awb)
+        st.selectbox("✏️ عدل نوع الشكوى", [st.session_state[keys["type"]]] + [t for t in types_list if t != st.session_state[keys["type"]]], index=0, key=keys["type"])
+        st.text_area("✏️ عدل الملاحظات", value=st.session_state[keys["notes"]], key=keys["notes"])
+        st.text_area("✏️ عدل الإجراء", value=st.session_state[keys["action"]], key=keys["action"])
+        st.text_input("✏️ Outbound AWB", value=st.session_state[keys["outbound"]], key=keys["outbound"])
+        st.text_input("✏️ Inbound AWB", value=st.session_state[keys["inbound"]], key=keys["inbound"])
 
-            col1, col2, col3, col4, col5, col6 = st.columns(6)
+        col1, col2, col3, col4, col5, col6 = st.columns(6)
 
-            if new_outbound and col5.form_submit_button("🚚 تحقق Outbound"):
-                st.info(f"🚚 Outbound: {get_aramex_status(new_outbound)}")
+        if st.session_state[keys["outbound"]]:
+            if col5.button("🚚 تحقق Outbound", key=f"check_out_{comp_id}"):
+                status_out = get_aramex_status(st.session_state[keys["outbound"]])
+                st.info(f"🚚 Outbound AWB: {st.session_state[keys['outbound']]} | الحالة: {status_out}")
 
-            if new_inbound and col6.form_submit_button("📦 تحقق Inbound"):
-                st.info(f"📦 Inbound: {get_aramex_status(new_inbound)}")
+        if st.session_state[keys["inbound"]]:
+            if col6.button("📦 تحقق Inbound", key=f"check_in_{comp_id}"):
+                status_in = get_aramex_status(st.session_state[keys["inbound"]])
+                st.info(f"📦 Inbound AWB: {st.session_state[keys['inbound']]} | الحالة: {status_in}")
 
-            if col1.form_submit_button("💾 حفظ"):
-                safe_update(sheet, f"B{i}:H{i}", [[new_type, new_notes, new_action, date_added, restored, new_outbound, new_inbound]])
-                st.success("✅ تم التعديل")
-                st.session_state.rerun_flag = True
+        if col1.button("💾 حفظ", key=f"save_{comp_id}_{sheet.title}"):
+            safe_update(sheet, f"B{i}", [[st.session_state[keys["type"]]]])
+            safe_update(sheet, f"C{i}", [[st.session_state[keys["notes"]]]])
+            safe_update(sheet, f"D{i}", [[st.session_state[keys["action"]]]])
+            safe_update(sheet, f"G{i}", [[st.session_state[keys["outbound"]]]])
+            safe_update(sheet, f"H{i}", [[st.session_state[keys["inbound"]]]])
+            st.success("✅ تم التعديل")
+            st.session_state.rerun_flag = True
 
-            if col2.form_submit_button("🗑️ حذف"):
-                safe_delete(sheet, i)
-                st.warning("🗑️ تم حذف الشكوى")
-                st.session_state.rerun_flag = True
+        if col2.button("🗑️ حذف", key=f"delete_{comp_id}_{sheet.title}"):
+            safe_delete(sheet, i)
+            st.warning("🗑️ تم حذف الشكوى")
+            st.session_state.rerun_flag = True
 
-            if col3.form_submit_button("📦 أرشفة"):
-                safe_append(archive_sheet, [comp_id, new_type, new_notes, new_action, date_added, "🔄 مؤرشفة", new_outbound, new_inbound])
+        if col3.button("📦 أرشفة", key=f"archive_{comp_id}_{sheet.title}"):
+            safe_append(archive_sheet, [comp_id, st.session_state[keys["type"]], st.session_state[keys["notes"]], st.session_state[keys["action"]], date_added, restored, st.session_state[keys["outbound"]], st.session_state[keys["inbound"]]])
+            time.sleep(0.5)
+            safe_delete(sheet, i)
+            st.success("♻️ الشكوى انتقلت للأرشيف")
+            st.session_state.rerun_flag = True
+
+        if not in_responded:
+            if col4.button("➡️ نقل للإجراءات المردودة", key=f"to_responded_{comp_id}_{sheet.title}"):
+                safe_append(responded_sheet, [comp_id, st.session_state[keys["type"]], st.session_state[keys["notes"]], st.session_state[keys["action"]], date_added, restored, st.session_state[keys["outbound"]], st.session_state[keys["inbound"]]])
                 time.sleep(0.5)
                 safe_delete(sheet, i)
-                st.success("♻️ الشكوى انتقلت للأرشيف")
+                st.success("✅ اتنقلت للإجراءات المردودة")
                 st.session_state.rerun_flag = True
-
-            if not in_responded:
-                if col4.form_submit_button("➡️ للإجراءات المردودة"):
-                    safe_append(responded_sheet, [comp_id, new_type, new_notes, new_action, date_added, restored, new_outbound, new_inbound])
-                    time.sleep(0.5)
-                    safe_delete(sheet, i)
-                    st.success("✅ اتنقلت للمردودة")
-                    st.session_state.rerun_flag = True
-            else:
-                if col4.form_submit_button("⬅️ رجوع للنشطة"):
-                    safe_append(complaints_sheet, [comp_id, new_type, new_notes, new_action, date_added, restored, new_outbound, new_inbound])
-                    time.sleep(0.5)
-                    safe_delete(sheet, i)
-                    st.success("✅ اتنقلت للنشطة")
-                    st.session_state.rerun_flag = True
+        else:
+            if col4.button("⬅️ رجوع للنشطة", key=f"to_active_{comp_id}_{sheet.title}"):
+                safe_append(complaints_sheet, [comp_id, st.session_state[keys["type"]], st.session_state[keys["notes"]], st.session_state[keys["action"]], date_added, restored, st.session_state[keys["outbound"]], st.session_state[keys["inbound"]]])
+                time.sleep(0.5)
+                safe_delete(sheet, i)
+                st.success("✅ اتنقلت للنشطة")
+                st.session_state.rerun_flag = True
 
 # ====== البحث ======
 st.header("🔍 البحث عن شكوى")
-with st.form("search_form"):
-    search_id = st.text_input("🆔 اكتب رقم الشكوى")
-    submitted_search = st.form_submit_button("🔍 بحث")
-    if submitted_search:
+search_id = st.text_input("🆔 اكتب رقم الشكوى")
+if st.button("🔍 بحث"):
+    if search_id.strip():
         found = False
         for sheet in [complaints_sheet, responded_sheet, archive_sheet]:
             data = sheet.get_all_values()
@@ -241,22 +263,31 @@ with st.form("add_complaint", clear_on_submit=True):
             responded = responded_sheet.get_all_records()
             archive = archive_sheet.get_all_records()
 
-            active_ids = [str(c["ID"]) for c in complaints] + [str(r["ID"]) for r in responded]
+            active_ids = [str(c["ID"]) for c in complaints]
+            responded_ids = [str(r["ID"]) for r in responded]
             archive_ids = [str(a["ID"]) for a in archive]
 
             date_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
             if comp_id in active_ids:
-                st.error("⚠️ الشكوى موجودة بالفعل في النشطة أو المردودة")
+                st.error("⚠️ الشكوى موجودة بالفعل في النشطة")
+
+            elif comp_id in responded_ids:
+                st.error("⚠️ الشكوى موجودة بالفعل في المردودة")
+
             elif comp_id in archive_ids:
                 for idx, row in enumerate(archive_sheet.get_all_values()[1:], start=2):
                     if str(row[0]) == comp_id:
-                        safe_append(complaints_sheet, [row[0], row[1], row[2], row[3], date_now, "🔄 مسترجعة", row[6] if len(row) > 6 else "", row[7] if len(row) > 7 else ""])
+                        safe_append(
+                            complaints_sheet,
+                            [row[0], row[1], row[2], row[3], date_now, "🔄 مسترجعة", row[6] if len(row) > 6 else "", row[7] if len(row) > 7 else ""]
+                        )
                         time.sleep(0.5)
                         safe_delete(archive_sheet, idx)
                         st.success("✅ الشكوى كانت في الأرشيف وتمت إعادتها للنشطة")
                         st.session_state.rerun_flag = True
                         break
+
             else:
                 if action.strip():
                     safe_append(responded_sheet, [comp_id, comp_type, notes, action, date_now, "", outbound_awb, inbound_awb])
@@ -267,19 +298,51 @@ with st.form("add_complaint", clear_on_submit=True):
                 st.session_state.rerun_flag = True
 
 # ====== عرض الشكاوى ======
-st.header("📌 الشكاوى النشطة")
-for i, row in enumerate(complaints_sheet.get_all_values()[1:], start=2):
-    render_complaint(complaints_sheet, i, row)
+st.header("📋 الشكاوى النشطة:")
+active_notes = complaints_sheet.get_all_values()
+if len(active_notes) > 1:
+    for i, row in enumerate(active_notes[1:], start=2):
+        render_complaint(complaints_sheet, i, row, in_responded=False)
+else:
+    st.info("لا توجد شكاوى نشطة حالياً.")
 
-st.header("📝 الإجراءات المردودة")
-for i, row in enumerate(responded_sheet.get_all_values()[1:], start=2):
-    render_complaint(responded_sheet, i, row, in_responded=True)
+st.header("✅ الإجراءات المردودة:")
+responded_notes = responded_sheet.get_all_values()
+if len(responded_notes) > 1:
+    for i, row in enumerate(responded_notes[1:], start=2):
+        render_complaint(responded_sheet, i, row, in_responded=True)
+else:
+    st.info("لا توجد شكاوى مردودة حالياً.")
 
-st.header("🗄️ الأرشيف")
-for i, row in enumerate(archive_sheet.get_all_values()[1:], start=2):
-    render_complaint(archive_sheet, i, row)
+st.header("📦 الأرشيف:")
+archived = archive_sheet.get_all_values()
+if len(archived) > 1:
+    for row in archived[1:]:
+        comp_id, comp_type, notes, action, date_added = row[:5]
+        restored = row[5] if len(row) > 5 else ""
+        outbound_awb = row[6] if len(row) > 6 else ""
+        inbound_awb = row[7] if len(row) > 7 else ""
+        with st.expander(f"📦 {comp_id} | 📌 {comp_type} | 📅 {date_added} {restored}"):
+            st.write(f"📌 النوع: {comp_type}")
+            st.write(f"✅ الإجراء: {action}")
+            st.caption(f"📅 تاريخ التسجيل: {date_added}")
+            col1, col2 = st.columns(2)
+            if outbound_awb:
+                if col1.button(f"🚚 تحقق Outbound {comp_id}", key=f"archive_check_out_{comp_id}"):
+                    status_out = get_aramex_status(outbound_awb)
+                    st.info(f"🚚 Outbound AWB: {outbound_awb} | الحالة: {status_out}")
+            else:
+                col1.write("🚚 Outbound: —")
+            if inbound_awb:
+                if col2.button(f"📦 تحقق Inbound {comp_id}", key=f"archive_check_in_{comp_id}"):
+                    status_in = get_aramex_status(inbound_awb)
+                    st.info(f"📦 Inbound AWB: {inbound_awb} | الحالة: {status_in}")
+            else:
+                col2.write("📦 Inbound: —")
+else:
+    st.info("لا يوجد شكاوى في الأرشيف حالياً.")
 
-# ====== rerun ======
-if 'rerun_flag' in st.session_state and st.session_state.rerun_flag:
+# ====== إعادة تشغيل عند الحاجة ======
+if st.session_state.rerun_flag:
     st.session_state.rerun_flag = False
-    st.experimental_rerun()
+    st.rerun()
