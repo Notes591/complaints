@@ -146,21 +146,18 @@ def get_aramex_status(awb_number, search_type="Waybill"):
     except Exception as e:
         return f"خطأ في جلب الحالة: {e}"
 
-# ====== دالة لجلب بيانات ReturnWarehouse ======
+# ====== جلب بيانات ReturnWarehouse ======
 def get_return_warehouse_data(comp_id):
-    all_rows = return_warehouse_sheet.get_all_values()[1:]  # تخطي العنوان
-    for row in all_rows:
-        if str(row[0]) == str(comp_id):
-            return {
-                "رقم الطلب": row[0],
-                "الفاتورة": row[1],
-                "التاريخ": row[2],
-                "الزبون": row[3],
-                "المبلغ": row[4],
-                "رقم الشحنة": row[5],
-                "البيان": row[6]
-            }
-    return None
+    try:
+        all_rows = return_warehouse_sheet.get_all_values()[1:]  # تخطي العنوان
+        headers = ["رقم الطلب", "الفاتورة", "التاريخ", "الزبون", "المبلغ", "رقم الشحنة", "البيان"]
+        for row in all_rows:
+            if str(row[0]) == str(comp_id):
+                return dict(zip(headers, row))
+        return None
+    except gspread.exceptions.APIError as e:
+        st.error(f"❌ خطأ في الوصول إلى ReturnWarehouse: {e}")
+        return None
 
 # ====== دالة عرض الشكوى داخل form لتجنب التحديث التلقائي ======
 def render_complaint(sheet, i, row, in_responded=False):
@@ -169,10 +166,7 @@ def render_complaint(sheet, i, row, in_responded=False):
     outbound_awb = row[6] if len(row) > 6 else ""
     inbound_awb = row[7] if len(row) > 7 else ""
 
-    # البحث في ReturnWarehouse لو في المردودة
-    warehouse_data = None
-    if in_responded:
-        warehouse_data = get_return_warehouse_data(comp_id)
+    warehouse_data = get_return_warehouse_data(comp_id)
 
     with st.expander(f"🆔 {comp_id} | 📌 {comp_type} | 📅 {date_added} {restored}"):
         with st.form(key=f"form_{comp_id}_{sheet.title}"):
@@ -181,10 +175,9 @@ def render_complaint(sheet, i, row, in_responded=False):
             st.write(f"✅ الإجراء: {action}")
             st.caption(f"📅 تاريخ التسجيل: {date_added}")
 
-            # عرض البيان فقط لو موجود في ReturnWarehouse
             if warehouse_data:
-                st.write(f"البيان: {warehouse_data['البيان']}")
                 st.write(f"📌 الزبون: {warehouse_data['الزبون']}")
+                st.write(f"📄 البيان: {warehouse_data['البيان']}")
 
             new_type = st.selectbox("✏️ عدل نوع الشكوى", [comp_type] + [t for t in types_list if t != comp_type], index=0)
             new_notes = st.text_area("✏️ عدل الملاحظات", value=notes)
@@ -256,7 +249,6 @@ with st.form("add_complaint", clear_on_submit=True):
             if comp_id in all_active_ids:
                 st.error("⚠️ الشكوى موجودة بالفعل في النشطة أو المردودة")
             elif comp_id in all_archive_ids:
-                # استرجاع الشكوى من الأرشيف
                 for idx, row in enumerate(archive_sheet.get_all_values()[1:], start=2):
                     if str(row[0]) == comp_id:
                         restored_notes = row[2]
@@ -303,10 +295,14 @@ if len(archived) > 1:
         restored = row[5] if len(row) > 5 else ""
         outbound_awb = row[6] if len(row) > 6 else ""
         inbound_awb = row[7] if len(row) > 7 else ""
+        warehouse_data = get_return_warehouse_data(comp_id)
         with st.expander(f"📦 {comp_id} | 📌 {comp_type} | 📅 {date_added} {restored}"):
             st.write(f"📌 النوع: {comp_type}")
             st.write(f"✅ الإجراء: {action}")
             st.caption(f"📅 تاريخ التسجيل: {date_added}")
+            if warehouse_data:
+                st.write(f"📌 الزبون: {warehouse_data['الزبون']}")
+                st.write(f"📄 البيان: {warehouse_data['البيان']}")
             if outbound_awb:
                 st.info(f"🚚 Outbound AWB: {outbound_awb} | الحالة: {get_aramex_status(outbound_awb)}")
             if inbound_awb:
@@ -357,6 +353,7 @@ if len(aramex_data) > 1:
                     st.warning("🗑️ تم حذف الطلب")
 
                 if submitted_archive:
-                    safe_append(aramex_archive, [order_id, new_status, date_added, new_action])
-                    safe_delete(aramex_sheet, i)
-                    st.success("♻️ تم أرشفة الطلب")
+    safe_append(aramex_archive, [order_id, new_status, date_added, new_action])
+    safe_delete(aramex_sheet, i)
+    st.success("♻️ تم أرشفة الطلب")
+
