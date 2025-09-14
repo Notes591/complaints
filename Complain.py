@@ -161,7 +161,7 @@ def get_aramex_status(awb_number, search_type="Waybill"):
         return f"خطأ في جلب الحالة: {e}"
 
 # ====== دالة عرض الشكوى داخل form لتجنب التحديث التلقائي ======
-def render_complaint(sheet, i, row, in_responded=False):
+def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
     comp_id, comp_type, notes, action, date_added = row[:5]
     restored = row[5] if len(row) > 5 else ""
     outbound_awb = row[6] if len(row) > 6 else ""
@@ -174,20 +174,19 @@ def render_complaint(sheet, i, row, in_responded=False):
             st.write(f"✅ الإجراء: {action}")
             st.caption(f"📅 تاريخ التسجيل: {date_added}")
 
-            # ====== بيانات ReturnWarehouse إذا موجودة (فقط المردودة) ======
-            if in_responded:
-                rw_record = get_returnwarehouse_record(comp_id)
-                if rw_record:
-                    st.info(
-                        f"📦 سجل من ReturnWarehouse:\n"
-                        f"رقم الطلب: {rw_record['رقم الطلب']}\n"
-                        f"الفاتورة: {rw_record['الفاتورة']}\n"
-                        f"التاريخ: {rw_record['التاريخ']}\n"
-                        f"الزبون: {rw_record['الزبون']}\n"
-                        f"المبلغ: {rw_record['المبلغ']}\n"
-                        f"رقم الشحنة: {rw_record['رقم الشحنة']}\n"
-                        f"البيان: {rw_record['البيان']}"
-                    )
+            # ====== بيانات ReturnWarehouse إذا موجودة ======
+            rw_record = get_returnwarehouse_record(comp_id)
+            if rw_record:
+                st.info(
+                    f"📦 سجل من ReturnWarehouse:\n"
+                    f"رقم الطلب: {rw_record['رقم الطلب']}\n"
+                    f"الفاتورة: {rw_record['الفاتورة']}\n"
+                    f"التاريخ: {rw_record['التاريخ']}\n"
+                    f"الزبون: {rw_record['الزبون']}\n"
+                    f"المبلغ: {rw_record['المبلغ']}\n"
+                    f"رقم الشحنة: {rw_record['رقم الشحنة']}\n"
+                    f"البيان: {rw_record['البيان']}"
+                )
 
             new_type = st.selectbox("✏️ عدل نوع الشكوى", [comp_type] + [t for t in types_list if t != comp_type], index=0)
             new_notes = st.text_area("✏️ عدل الملاحظات", value=notes)
@@ -246,7 +245,7 @@ if search_id.strip():
     for i, row in enumerate(active_notes[1:], start=2):
         if str(row[0]) == search_id:
             st.success(f"✅ الشكوى موجودة في النشطة")
-            render_complaint(complaints_sheet, i, row, in_responded=False)
+            render_complaint(complaints_sheet, i, row, in_responded=False, in_archive=False)
             found = True
             break
     # البحث في المردودة
@@ -264,18 +263,7 @@ if search_id.strip():
         for i, row in enumerate(archived[1:], start=2):
             if str(row[0]) == search_id:
                 st.success(f"✅ الشكوى موجودة في الأرشيف")
-                comp_id, comp_type, notes, action, date_added = row[:5]
-                restored = row[5] if len(row) > 5 else ""
-                outbound_awb = row[6] if len(row) > 6 else ""
-                inbound_awb = row[7] if len(row) > 7 else ""
-                with st.expander(f"📦 {comp_id} | 📌 {comp_type} | 📅 {date_added} {restored}"):
-                    st.write(f"📌 النوع: {comp_type}")
-                    st.write(f"✅ الإجراء: {action}")
-                    st.caption(f"📅 تاريخ التسجيل: {date_added}")
-                    if outbound_awb:
-                        st.info(f"🚚 Outbound AWB: {outbound_awb} | الحالة: {get_aramex_status(outbound_awb)}")
-                    if inbound_awb:
-                        st.info(f"📦 Inbound AWB: {inbound_awb} | الحالة: {get_aramex_status(inbound_awb)}")
+                render_complaint(archive_sheet, i, row, in_archive=True)
                 found = True
                 break
     if not found:
@@ -329,7 +317,7 @@ st.header("📋 الشكاوى النشطة:")
 active_notes = complaints_sheet.get_all_values()
 if len(active_notes) > 1:
     for i, row in enumerate(active_notes[1:], start=2):
-        render_complaint(complaints_sheet, i, row, in_responded=False)
+        render_complaint(complaints_sheet, i, row, in_responded=False, in_archive=False)
 else:
     st.info("لا توجد شكاوى نشطة حالياً.")
 
@@ -346,19 +334,8 @@ else:
 st.header("📦 الأرشيف:")
 archived = archive_sheet.get_all_values()
 if len(archived) > 1:
-    for row in archived[1:]:
-        comp_id, comp_type, notes, action, date_added = row[:5]
-        restored = row[5] if len(row) > 5 else ""
-        outbound_awb = row[6] if len(row) > 6 else ""
-        inbound_awb = row[7] if len(row) > 7 else ""
-        with st.expander(f"📦 {comp_id} | 📌 {comp_type} | 📅 {date_added} {restored}"):
-            st.write(f"📌 النوع: {comp_type}")
-            st.write(f"✅ الإجراء: {action}")
-            st.caption(f"📅 تاريخ التسجيل: {date_added}")
-            if outbound_awb:
-                st.info(f"🚚 Outbound AWB: {outbound_awb} | الحالة: {get_aramex_status(outbound_awb)}")
-            if inbound_awb:
-                st.info(f"📦 Inbound AWB: {inbound_awb} | الحالة: {get_aramex_status(inbound_awb)}")
+    for i, row in enumerate(archived[1:], start=2):
+        render_complaint(archive_sheet, i, row, in_archive=True)
 else:
     st.info("لا يوجد شكاوى في الأرشيف.")
 
