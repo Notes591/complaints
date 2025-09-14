@@ -192,7 +192,7 @@ def render_complaint(sheet, i, row, in_responded=False):
                 status_in = get_aramex_status(st.session_state[keys["inbound"]])
                 st.info(f"📦 Inbound AWB: {st.session_state[keys['inbound']]} | الحالة: {status_in}")
 
-        # أزرار الحفظ والحذف والأرشفة والنقل
+        # ====== أزرار الحفظ والحذف والأرشفة والنقل ======
         if col1.button("💾 حفظ", key=f"save_{comp_id}_{sheet.title}"):
             safe_update(sheet, f"B{i}", [[st.session_state[keys["type"]]]])
             safe_update(sheet, f"C{i}", [[st.session_state[keys["notes"]]]])
@@ -289,7 +289,7 @@ with st.form("add_complaint", clear_on_submit=True):
                     st.success("✅ تم تسجيل الشكوى في النشطة")
                 st.session_state.rerun_flag = True
 
-# ====== عرض الشكاوى النشطة والمردودة والأرشيف ======
+# ====== عرض الشكاوى النشطة ======
 st.header("📋 الشكاوى النشطة:")
 active_notes = complaints_sheet.get_all_values()
 if len(active_notes) > 1:
@@ -298,6 +298,7 @@ if len(active_notes) > 1:
 else:
     st.info("لا توجد شكاوى نشطة حالياً.")
 
+# ====== الإجراءات المردودة ======
 st.header("✅ الإجراءات المردودة:")
 responded_notes = responded_sheet.get_all_values()
 if len(responded_notes) > 1:
@@ -306,6 +307,7 @@ if len(responded_notes) > 1:
 else:
     st.info("لا توجد شكاوى مردودة حالياً.")
 
+# ====== الأرشيف مع أزرار تحقق أرامكس ======
 st.header("📦 الأرشيف:")
 archived = archive_sheet.get_all_values()
 if len(archived) > 1:
@@ -321,10 +323,16 @@ if len(archived) > 1:
             col1, col2 = st.columns(2)
             if outbound_awb:
                 if col1.button(f"🚚 تحقق Outbound {comp_id}", key=f"archive_check_out_{comp_id}"):
-                    st.info(f"🚚 Outbound AWB: {outbound_awb} | الحالة: {get_aramex_status(outbound_awb)}")
+                    status_out = get_aramex_status(outbound_awb)
+                    st.info(f"🚚 Outbound AWB: {outbound_awb} | الحالة: {status_out}")
+            else:
+                col1.write("🚚 Outbound: —")
             if inbound_awb:
                 if col2.button(f"📦 تحقق Inbound {comp_id}", key=f"archive_check_in_{comp_id}"):
-                    st.info(f"📦 Inbound AWB: {inbound_awb} | الحالة: {get_aramex_status(inbound_awb)}")
+                    status_in = get_aramex_status(inbound_awb)
+                    st.info(f"📦 Inbound AWB: {inbound_awb} | الحالة: {status_in}")
+            else:
+                col2.write("📦 Inbound: —")
 else:
     st.info("لا يوجد شكاوى في الأرشيف.")
 
@@ -357,8 +365,8 @@ if len(aramex_data) > 1:
             new_action = st.text_area("✏️ عدل الإجراء", value=action, key=f"action_{order_id}")
             col1, col2, col3 = st.columns(3)
             if col1.button("💾 حفظ", key=f"save_aramex_{order_id}"):
-                safe_update(aramex_sheet, f"B{i}", [[st.session_state[f"status_{order_id}"]]])
-                safe_update(aramex_sheet, f"D{i}", [[st.session_state[f"action_{order_id}"]]])
+                safe_update(aramex_sheet, f"B{i}", [[new_status]])
+                safe_update(aramex_sheet, f"D{i}", [[new_action]])
                 st.success("✅ تم تعديل الطلب")
                 st.session_state.rerun_flag = True
             if col2.button("🗑️ حذف", key=f"delete_aramex_{order_id}"):
