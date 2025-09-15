@@ -160,7 +160,7 @@ def get_aramex_status(awb_number, search_type="Waybill"):
     except Exception as e:
         return f"خطأ في جلب الحالة: {e}"
 
-# ====== دالة عرض الشكوى ======
+# ====== دالة عرض الشكوى داخل form لتجنب التحديث التلقائي ======
 def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
     comp_id, comp_type, notes, action, date_added = row[:5]
     restored = row[5] if len(row) > 5 else ""
@@ -174,7 +174,7 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
             st.write(f"✅ الإجراء: {action}")
             st.caption(f"📅 تاريخ التسجيل: {date_added}")
 
-            # بيانات ReturnWarehouse
+            # ====== بيانات ReturnWarehouse إذا موجودة ======
             rw_record = get_returnwarehouse_record(comp_id)
             if rw_record:
                 st.info(
@@ -199,7 +199,6 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
             if new_inbound:
                 st.info(f"📦 Inbound AWB: {new_inbound} | الحالة: {get_aramex_status(new_inbound)}")
 
-            # أزرار حفظ/حذف/أرشفة/نقل
             col1, col2, col3, col4 = st.columns(4)
             submitted_save = col1.form_submit_button("💾 حفظ")
             submitted_delete = col2.form_submit_button("🗑️ حذف")
@@ -236,25 +235,7 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
                     safe_delete(sheet, i)
                     st.success("✅ اتنقلت للنشطة")
 
-        # ====== أزرار المردودة مع باسورد خارج الـ form ======
-        if in_responded:
-            st.markdown("---")
-            st.write("🔹 أزرار خاصة بالمردودة")
-            pwd_input = st.text_input("🔑 أدخل الباسورد لتنفيذ أي زر:", type="password", key=f"pwd_{comp_id}")
-            col_r1, col_r2, col_r3, col_r4 = st.columns(4)
-            if col_r1.button("↩️ إرجاع") and pwd_input == "1234":
-                st.success("✅ تم تنفيذ إرجاع")
-            if col_r2.button("🔄 استبدال") and pwd_input == "1234":
-                st.success("✅ تم تنفيذ استبدال")
-            if col_r3.button("📤 إرسال") and pwd_input == "1234":
-                st.success("✅ تم تنفيذ إرسال")
-            if col_r4.button("📞 طلب مندوب") and pwd_input == "1234":
-                st.success("✅ تم طلب مندوب")
-            # حالة الباسورد الخطأ
-            if any([col_r1.button("↩️ إرجاع"), col_r2.button("🔄 استبدال"), col_r3.button("📤 إرسال"), col_r4.button("📞 طلب مندوب")]) and pwd_input != "1234":
-                st.error("❌ الباسورد غير صحيح")
-
-# ====== البحث عن الشكوى ======
+# ====== بحث عن الشكوى حسب رقم الشكوى ======
 st.header("🔍 البحث عن شكوى")
 search_id = st.text_input("أدخل رقم الشكوى للبحث")
 if search_id.strip():
