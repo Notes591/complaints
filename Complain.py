@@ -63,11 +63,11 @@ def get_order_status(order_id):
         if str(row[1]) == str(order_id):
             delegate = row[3] if len(row) > 3 else ""
             if delegate.strip().lower() == "aramex":
-                return "📦 مشحونة مع أرامكس"
+                return "📦 مشحونة مع أرامكس الطلب الاساسي"
             elif delegate.strip():
-                return f"🚚 مشحونة مع مندوب الرياض ({delegate})"
+                return f" الطلب الاساسي🚚 مشحونة مع مندوب الرياض ({delegate})"
             else:
-                return "⏳ تحت المتابعة"
+                return "الطلب الاساسي⏳ تحت المتابعة"
     return "⏳ تحت المتابعة"
 
 # ====== دوال Retry ======
