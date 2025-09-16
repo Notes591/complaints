@@ -21,7 +21,7 @@ client = gspread.authorize(creds)
 # ====== أوراق جوجل شيت ======
 SHEET_NAME = "Complaints"
 sheets_dict = {}
-for title in ["Complaints", "Responded", "Archive", "Types", "معلق ارامكس", "أرشيف أرامكس", "ReturnWarehouse"]:
+for title in ["Complaints", "Responded", "Archive", "Types", "معلق ارامكس", "أرشيف أرامكس", "ReturnWarehouse", "Order Number"]:
     sheets_dict[title] = client.open(SHEET_NAME).worksheet(title)
 
 complaints_sheet = sheets_dict["Complaints"]
@@ -31,6 +31,7 @@ types_sheet = sheets_dict["Types"]
 aramex_sheet = sheets_dict["معلق ارامكس"]
 aramex_archive = sheets_dict["أرشيف أرامكس"]
 return_warehouse_sheet = sheets_dict["ReturnWarehouse"]
+order_number_sheet = sheets_dict["Order Number"]
 
 # ====== إعدادات الصفحة ======
 st.set_page_config(page_title="📢 نظام الشكاوى", page_icon="⚠️")
@@ -54,6 +55,20 @@ def get_returnwarehouse_record(order_id):
                 "البيان": row[6]
             }
     return None
+
+# ====== بيانات Order Number ======
+order_number_data = order_number_sheet.get_all_values()[1:]
+def get_order_status(order_id):
+    for row in order_number_data:
+        if str(row[1]) == str(order_id):
+            delegate = row[3] if len(row) > 3 else ""
+            if delegate.strip().lower() == "aramex":
+                return "📦 مشحونة مع أرامكس"
+            elif delegate.strip():
+                return f"🚚 مشحونة مع مندوب الرياض ({delegate})"
+            else:
+                return "⏳ تحت المتابعة"
+    return "⏳ تحت المتابعة"
 
 # ====== دوال Retry ======
 def safe_append(sheet, row_data, retries=5, delay=1):
@@ -160,14 +175,17 @@ def get_aramex_status(awb_number, search_type="Waybill"):
     except Exception as e:
         return f"خطأ في جلب الحالة: {e}"
 
-# ====== دالة عرض الشكوى داخل form لتجنب التحديث التلقائي ======
+# ====== دالة عرض الشكوى داخل form ======
 def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
     comp_id, comp_type, notes, action, date_added = row[:5]
     restored = row[5] if len(row) > 5 else ""
     outbound_awb = row[6] if len(row) > 6 else ""
     inbound_awb = row[7] if len(row) > 7 else ""
 
-    with st.expander(f"🆔 {comp_id} | 📌 {comp_type} | 📅 {date_added} {restored}"):
+    # جلب حالة الشحنة من Order Number
+    order_status = get_order_status(comp_id)
+
+    with st.expander(f"🆔 {comp_id} | 📌 {comp_type} | 📅 {date_added} {restored} | {order_status}"):
         with st.form(key=f"form_{comp_id}_{sheet.title}"):
             st.write(f"📌 النوع الحالي: {comp_type}")
             st.write(f"📝 الملاحظات: {notes}")
@@ -235,7 +253,7 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
                     safe_delete(sheet, i)
                     st.success("✅ اتنقلت للنشطة")
 
-# ====== بحث عن الشكوى حسب رقم الشكوى ======
+# ====== البحث عن الشكوى ======
 st.header("🔍 البحث عن شكوى")
 search_id = st.text_input("أدخل رقم الشكوى للبحث")
 if search_id.strip():
