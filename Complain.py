@@ -339,6 +339,24 @@ if len(active_notes) > 1:
 else:
     st.info("لا توجد شكاوى نشطة حالياً.")
 
+# ====== تحديث حالات أرامكس قبل المردودة ======
+st.subheader("🔄 تحديث حالات أرامكس")
+if st.button("تحديث جميع الحالات"):
+    aramex_data = aramex_sheet.get_all_values()[1:]  # بدون العنوان
+    if not aramex_data:
+        st.info("لا توجد طلبات لتحديثها.")
+    else:
+        progress = st.progress(0)
+        for idx, row in enumerate(aramex_data, start=2):
+            order_id = row[0]
+            try:
+                new_status = get_aramex_status(order_id)
+                safe_update(aramex_sheet, f"B{idx}", [[new_status]])
+            except Exception as e:
+                st.error(f"❌ فشل تحديث الطلب {order_id}: {e}")
+            progress.progress(idx / len(aramex_data))
+        st.success("✅ تم تحديث جميع حالات أرامكس")
+
 # ====== عرض الإجراءات المردودة ======
 st.header("✅ الإجراءات المردودة:")
 responded_notes = responded_sheet.get_all_values()
@@ -400,3 +418,16 @@ if len(aramex_data) > 1:
                     safe_append(aramex_archive, [order_id, new_status, date_added, new_action])
                     safe_delete(aramex_sheet, i)
                     st.success("♻️ تم أرشفة الطلب")
+
+# ====== عرض أرشيف أرامكس في تبويب مستقل ======
+st.header("📦 أرشيف أرامكس")
+aramex_archive_data = aramex_archive.get_all_values()
+if len(aramex_archive_data) > 1:
+    for i, row in enumerate(aramex_archive_data[1:], start=2):
+        order_id, status, date_added, action = row[:4]
+        with st.expander(f"📦 طلب {order_id}"):
+            st.write(f"📌 الحالة: {status}")
+            st.write(f"✅ الإجراء: {action}")
+            st.caption(f"📅 تاريخ الإضافة: {date_added}")
+else:
+    st.info("لا يوجد أرشيف أرامكس حالياً.")
