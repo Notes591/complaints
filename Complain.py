@@ -333,65 +333,81 @@ if len(active_notes) > 1:
 else:
     st.info("لا توجد شكاوى نشطة حالياً.")
 
-# ====== عرض الإجراءات المردودة مع إشعارات Delivered وReturnWarehouse ======
-st.header("✅ الإجراءات المردودة:")
+# ====== عرض الإجراءات المردودة بتبويبات لكل نوع ======
+st.header("✅ الإجراءات المردودة حسب النوع:")
 
 responded_notes = responded_sheet.get_all_values()
 if len(responded_notes) > 1:
-    for i, row in enumerate(responded_notes[1:], start=2):
-        comp_id = row[0]
-        outbound_awb = row[6] if len(row) > 6 else ""
-        inbound_awb = row[7] if len(row) > 7 else ""
+    # إنشاء قائمة أنواع موجودة في المردود
+    types_in_responded = list({row[1] for row in responded_notes[1:]})
+    
+    for complaint_type in types_in_responded:
+        with st.expander(f"📌 نوع الشكوى: {complaint_type}"):
+            # جمع كل الشكاوى لهذا النوع
+            type_rows = [(i, row) for i, row in enumerate(responded_notes[1:], start=2) if row[1] == complaint_type]
+            
+            for i, row in type_rows:
+                comp_id = row[0]
+                outbound_awb = row[6] if len(row) > 6 else ""
+                inbound_awb = row[7] if len(row) > 7 else ""
 
-        # ====== فحص Delivered ======
-        delivered_msgs = []
-        for awb, direction in [(outbound_awb, "Outbound"), (inbound_awb, "Inbound")]:
-            if awb:
-                status = get_aramex_status(awb)
-                if "Delivered" in status:
-                    match = re.search(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}", status)
-                    delivered_date = match.group(0) if match else "—"
-                    delivered_msgs.append(f"{direction} AWB: {awb} تم توصيلها بتاريخ {delivered_date}")
+                # ====== فحص Delivered ======
+                delivered_msgs = []
+                for awb, direction in [(outbound_awb, "Outbound"), (inbound_awb, "Inbound")]:
+                    if awb:
+                        status = get_aramex_status(awb)
+                        if "Delivered" in status:
+                            match = re.search(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}", status)
+                            delivered_date = match.group(0) if match else "—"
+                            delivered_msgs.append(f"{direction} AWB: {awb} تم توصيلها بتاريخ {delivered_date}")
 
-        # ====== فحص ReturnWarehouse ======
-        rw_record = get_returnwarehouse_record(comp_id)
-        rw_msg = None
-        if rw_record:
-            rw_msg = (
-                f"📦 بيانات ReturnWarehouse للشكوى {comp_id}:\n"
-                f"رقم الطلب: {rw_record['رقم الطلب']}\n"
-                f"الفاتورة: {rw_record['الفاتورة']}\n"
-                f"التاريخ: {rw_record['التاريخ']}\n"
-                f"الزبون: {rw_record['الزبون']}\n"
-                f"المبلغ: {rw_record['المبلغ']}\n"
-                f"رقم الشحنة: {rw_record['رقم الشحنة']}\n"
-                f"البيان: {rw_record['البيان']}"
-            )
+                # ====== فحص ReturnWarehouse ======
+                rw_record = get_returnwarehouse_record(comp_id)
+                rw_msg = None
+                if rw_record:
+                    rw_msg = (
+                        f"📦 بيانات ReturnWarehouse للشكوى {comp_id}:\n"
+                        f"رقم الطلب: {rw_record['رقم الطلب']}\n"
+                        f"الفاتورة: {rw_record['الفاتورة']}\n"
+                        f"التاريخ: {rw_record['التاريخ']}\n"
+                        f"الزبون: {rw_record['الزبون']}\n"
+                        f"المبلغ: {rw_record['المبلغ']}\n"
+                        f"رقم الشحنة: {rw_record['رقم الشحنة']}\n"
+                        f"البيان: {rw_record['البيان']}"
+                    )
 
-        # ====== عرض الإشعارات ======
-        if delivered_msgs and rw_msg:
-            st.warning(f"🚨🚨🚨 الشكوى {comp_id} تم توصيلها ولديها بيانات ReturnWarehouse! 📦📅")
-            st.write("✅ الحالات Delivered:")
-            for msg in delivered_msgs:
-                st.write(f"- {msg}")
-            st.info(rw_msg)
-        elif delivered_msgs:
-            st.warning(f"🚨🚨🚨 الشكوى {comp_id} تم توصيلها! 📦")
-            for msg in delivered_msgs:
-                st.write(f"- {msg}")
-        elif rw_msg:
-            st.info(rw_msg)
+                # ====== عرض الإشعارات ======
+                if delivered_msgs and rw_msg:
+                    st.warning(f"🚨🚨🚨 الشكوى {comp_id} تم توصيلها ولديها بيانات ReturnWarehouse! 📦📅")
+                    for msg in delivered_msgs:
+                        st.write(f"- {msg}")
+                    st.info(rw_msg)
+                elif delivered_msgs:
+                    st.warning(f"🚨🚨🚨 الشكوى {comp_id} تم توصيلها! 📦")
+                    for msg in delivered_msgs:
+                        st.write(f"- {msg}")
+                elif rw_msg:
+                    st.info(rw_msg)
 
-        render_complaint(responded_sheet, i, row, in_responded=True)
+                render_complaint(responded_sheet, i, row, in_responded=True)
 else:
     st.info("لا توجد شكاوى مردودة حالياً.")
 
-# ====== عرض الأرشيف ======
+# ====== عرض الأرشيف بعد المردود مع 50 فقط بشكل افتراضي + زر المزيد ======
 st.header("📦 الأرشيف:")
 archived = archive_sheet.get_all_values()
 if len(archived) > 1:
-    for i, row in enumerate(archived[1:], start=2):
+    if "archive_show_count" not in st.session_state:
+        st.session_state["archive_show_count"] = 50
+    show_count = st.session_state["archive_show_count"]
+
+    for i, row in enumerate(archived[1:show_count+1], start=2):
         render_complaint(archive_sheet, i, row, in_archive=True)
+
+    if show_count < len(archived) - 1:
+        if st.button("المزيد..."):
+            st.session_state["archive_show_count"] = show_count + 50
+            st.experimental_rerun()
 else:
     st.info("لا يوجد شكاوى في الأرشيف.")
 
