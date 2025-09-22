@@ -171,8 +171,21 @@ def get_aramex_status(awb_number, search_type="Waybill"):
     except Exception as e:
         return f"خطأ في جلب الحالة: {e}"
 
-# ====== زر تحديث حالات أرامكس ======
+# ====== زر تحديث حالات أرامكس باستخدام session_state ======
+if "aramex_statuses" not in st.session_state:
+    st.session_state.aramex_statuses = {}
+
 refresh_now = st.button("🔄 تحديث حالات أرامكس")
+if refresh_now:
+    aramex_data = aramex_sheet.get_all_values()[1:]
+    for row in aramex_data:
+        order_id = row[0]
+        outbound_awb = row[1] if len(row) > 1 else ""
+        inbound_awb = row[2] if len(row) > 2 else ""
+        status_out = get_aramex_status(outbound_awb) if outbound_awb else ""
+        status_in = get_aramex_status(inbound_awb) if inbound_awb else ""
+        st.session_state.aramex_statuses[order_id] = (status_out, status_in)
+    st.success("✅ تم تحديث جميع الحالات")
 
 # ====== دالة عرض الشكوى ======
 def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
@@ -184,15 +197,12 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
     order_status = get_order_status(comp_id)
 
     notifications = []
-    if refresh_now:
-        if outbound_awb:
-            status = get_aramex_status(outbound_awb)
-            if "Delivered" in status:
-                notifications.append("🚚 Outbound Delivered")
-        if inbound_awb:
-            status = get_aramex_status(inbound_awb)
-            if "Delivered" in status:
-                notifications.append("📦 Inbound Delivered")
+    if comp_id in st.session_state.aramex_statuses:
+        status_out, status_in = st.session_state.aramex_statuses[comp_id]
+        if "Delivered" in status_out:
+            notifications.append("🚚 Outbound Delivered")
+        if "Delivered" in status_in:
+            notifications.append("📦 Inbound Delivered")
 
     notif_text = " ".join(notifications)
 
