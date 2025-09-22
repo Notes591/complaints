@@ -332,4 +332,39 @@ with st.form("add_aramex", clear_on_submit=True):
     action = st.text_area("✅ الإجراء")
     submitted = st.form_submit_button("➕ إضافة")
     if submitted:
-       
+        if order_id.strip() and status.strip() and action.strip():
+            date_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            safe_append(aramex_sheet, [order_id, status, date_now, action])
+            st.success("✅ تم تسجيل الطلب")
+        else:
+            st.error("⚠️ لازم تدخل رقم الطلب + الحالة + الإجراء")
+
+st.subheader("📋 قائمة الطلبات المعلقة")
+aramex_data = aramex_sheet.get_all_values()
+if len(aramex_data) > 1:
+    for i, row in enumerate(aramex_data[1:], start=2):
+        order_id, status, date_added, action = row[:4]
+        with st.expander(f"📦 طلب {order_id}"):
+            st.write(f"📌 الحالة الحالية: {status}")
+            st.write(f"✅ الإجراء الحالي: {action}")
+            st.caption(f"📅 تاريخ الإضافة: {date_added}")
+            with st.form(key=f"form_aramex_{order_id}"):
+                new_status = st.text_input("✏️ عدل الحالة", value=status)
+                new_action = st.text_area("✏️ عدل الإجراء", value=action)
+                col1, col2, col3 = st.columns(3)
+                submitted_save = col1.form_submit_button("💾 حفظ")
+                submitted_delete = col2.form_submit_button("🗑️ حذف")
+                submitted_archive = col3.form_submit_button("📦 أرشفة")
+                if submitted_save:
+                    safe_update(aramex_sheet, f"B{i}", [[new_status]])
+                    safe_update(aramex_sheet, f"D{i}", [[new_action]])
+                    st.success("✅ تم تعديل الطلب")
+                if submitted_delete:
+                    safe_delete(aramex_sheet, i)
+                    st.warning("🗑️ تم حذف الطلب")
+                if submitted_archive:
+                    safe_append(aramex_archive, [order_id, new_status, date_added, new_action])
+                    safe_delete(aramex_sheet, i)
+                    st.success("♻️ تم أرشفة الطلب")
+else:
+    st.info("لا توجد طلبات معلقة حالياً.")
