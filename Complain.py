@@ -109,8 +109,8 @@ client_info = {
 }
 
 def remove_xml_namespaces(xml_str):
-    xml_str = re.sub(r'xmlns(:\w+)?="[^"]+"', '', xml_str)
-    xml_str = re.sub(r'(<\/?)(\w+:)', r'\1', xml_str)
+    xml_str = re.sub(r'xmlns(:\\w+)?="[^"]+"', '', xml_str)
+    xml_str = re.sub(r'(<\\/?)(\\w+:)', r'\\1', xml_str)
     return xml_str
 
 def extract_reference(tracking_result):
