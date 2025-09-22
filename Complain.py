@@ -172,8 +172,7 @@ def get_aramex_status(awb_number, search_type="Waybill"):
         return f"خطأ في جلب الحالة: {e}"
 
 # ====== زر تحديث حالات أرامكس ======
-if st.button("🔄 تحديث حالات أرامكس"):
-    st.session_state["refresh_aramex"] = True
+refresh_now = st.button("🔄 تحديث حالات أرامكس")
 
 # ====== دالة عرض الشكوى ======
 def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
@@ -184,16 +183,16 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
 
     order_status = get_order_status(comp_id)
 
-    # إشعارات بجانب رقم الشكوى
     notifications = []
-    if outbound_awb and st.session_state.get("refresh_aramex"):
-        status = get_aramex_status(outbound_awb)
-        if "Delivered" in status:
-            notifications.append("🚚 Outbound Delivered")
-    if inbound_awb and st.session_state.get("refresh_aramex"):
-        status = get_aramex_status(inbound_awb)
-        if "Delivered" in status:
-            notifications.append("📦 Inbound Delivered")
+    if refresh_now:
+        if outbound_awb:
+            status = get_aramex_status(outbound_awb)
+            if "Delivered" in status:
+                notifications.append("🚚 Outbound Delivered")
+        if inbound_awb:
+            status = get_aramex_status(inbound_awb)
+            if "Delivered" in status:
+                notifications.append("📦 Inbound Delivered")
 
     notif_text = " ".join(notifications)
 
@@ -329,4 +328,8 @@ if len(archived) > 1:
 st.header("🚚 معلق أرامكس")
 with st.form("add_aramex", clear_on_submit=True):
     order_id = st.text_input("🔢 رقم الطلب")
-    status = st.text_input
+    status = st.text_input("📌 الحالة")
+    action = st.text_area("✅ الإجراء")
+    submitted = st.form_submit_button("➕ إضافة")
+    if submitted:
+       
