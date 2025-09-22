@@ -9,9 +9,6 @@ import xml.etree.ElementTree as ET
 import re
 from streamlit_autorefresh import st_autorefresh
 
-# ====== تحديث تلقائي كل 60 ثانية ======
-st_autorefresh(interval=360*1000, key="auto_refresh")  # 60 ثانية
-
 # ====== الاتصال بجوجل شيت ======
 scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
 creds_dict = st.secrets["gcp_service_account"]
@@ -338,20 +335,16 @@ st.header("✅ الإجراءات المردودة حسب النوع:")
 
 responded_notes = responded_sheet.get_all_values()
 if len(responded_notes) > 1:
-    # إنشاء قائمة أنواع موجودة في المردود
     types_in_responded = list({row[1] for row in responded_notes[1:]})
     
     for complaint_type in types_in_responded:
         with st.expander(f"📌 نوع الشكوى: {complaint_type}"):
-            # جمع كل الشكاوى لهذا النوع
             type_rows = [(i, row) for i, row in enumerate(responded_notes[1:], start=2) if row[1] == complaint_type]
-            
             for i, row in type_rows:
                 comp_id = row[0]
                 outbound_awb = row[6] if len(row) > 6 else ""
                 inbound_awb = row[7] if len(row) > 7 else ""
 
-                # ====== فحص Delivered ======
                 delivered_msgs = []
                 for awb, direction in [(outbound_awb, "Outbound"), (inbound_awb, "Inbound")]:
                     if awb:
@@ -361,7 +354,6 @@ if len(responded_notes) > 1:
                             delivered_date = match.group(0) if match else "—"
                             delivered_msgs.append(f"{direction} AWB: {awb} تم توصيلها بتاريخ {delivered_date}")
 
-                # ====== فحص ReturnWarehouse ======
                 rw_record = get_returnwarehouse_record(comp_id)
                 rw_msg = None
                 if rw_record:
@@ -376,7 +368,6 @@ if len(responded_notes) > 1:
                         f"البيان: {rw_record['البيان']}"
                     )
 
-                # ====== عرض الإشعارات ======
                 if delivered_msgs and rw_msg:
                     st.warning(f"🚨🚨🚨 الشكوى {comp_id} تم توصيلها ولديها بيانات ReturnWarehouse! 📦📅")
                     for msg in delivered_msgs:
@@ -411,8 +402,21 @@ if len(archived) > 1:
 else:
     st.info("لا يوجد شكاوى في الأرشيف.")
 
-# ====== معلق أرامكس ======
+# ====== معلق أرامكس مع زر تحديث ======
 st.header("🚚 معلق ارامكس")
+
+# زر لتحديث جميع حالات أرامكس
+if st.button("🔄 تحديث جميع حالات أرامكس"):
+    aramex_data = aramex_sheet.get_all_values()
+    for i, row in enumerate(aramex_data[1:], start=2):
+        order_id, status, date_added, action = row[:4]
+        new_status = get_aramex_status(order_id)
+        safe_update(aramex_sheet, f"B{i}", [[new_status]])
+    st.success("✅ تم تحديث جميع حالات أرامكس")
+else:
+    aramex_data = aramex_sheet.get_all_values()
+
+# نموذج إضافة طلب جديد
 with st.form("add_aramex", clear_on_submit=True):
     order_id = st.text_input("🔢 رقم الطلب")
     status = st.text_input("📌 الحالة")
@@ -426,8 +430,8 @@ with st.form("add_aramex", clear_on_submit=True):
         else:
             st.error("⚠️ لازم تدخل رقم الطلب + الحالة + الإجراء")
 
+# عرض الطلبات المعلقة
 st.subheader("📋 قائمة الطلبات المعلقة")
-aramex_data = aramex_sheet.get_all_values()
 if len(aramex_data) > 1:
     for i, row in enumerate(aramex_data[1:], start=2):
         order_id, status, date_added, action = row[:4]
