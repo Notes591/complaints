@@ -176,7 +176,7 @@ def get_aramex_status(awb_number, search_type="Waybill"):
         return f"خطأ في جلب الحالة: {e}"
 
 # ====== دالة عرض الشكوى ======
-def render_complaint(sheet, i, row, in_responded=False, in_archive=False, fetch_awb=False):
+def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
     comp_id, comp_type, notes, action, date_added = row[:5]
     restored = row[5] if len(row) > 5 else ""
     outbound_awb = row[6] if len(row) > 6 else ""
@@ -218,7 +218,8 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False, fetch_
                 submitted_move = col4.form_submit_button("➡️ نقل للإجراءات المردودة")
             else:
                 submitted_move = col4.form_submit_button("⬅️ رجوع للنشطة")
-            fetch_awb_btn = col5.form_submit_button("🔄 تحديث حالة AWB")
+            # زر تحديث AWB لكل شكوى
+            submitted_fetch_awb = col5.form_submit_button("🔄 تحديث حالة AWB")
 
             if submitted_save:
                 safe_update(sheet, f"B{i}", [[new_type]])
@@ -247,33 +248,12 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False, fetch_
                     safe_delete(sheet, i)
                     st.success("✅ اتنقلت للنشطة")
 
-            if fetch_awb_btn:
+            if submitted_fetch_awb:
                 st.info("🔄 تحديث حالة AWB جاري...")
                 if new_outbound:
                     st.info(f"🚚 Outbound AWB: {new_outbound} | الحالة: {get_aramex_status(new_outbound)}")
                 if new_inbound:
                     st.info(f"📦 Inbound AWB: {new_inbound} | الحالة: {get_aramex_status(new_inbound)}")
-
-# ====== زر تحديث كل الحالات AWB ======
-st.header("🔄 تحديث جميع حالات AWB")
-if st.button("تحديث جميع الشكاوى النشطة والمردودة"):
-    active_notes = complaints_sheet.get_all_values()
-    responded_notes = responded_sheet.get_all_values()
-    st.info("🔄 جاري التحديث... قد يستغرق بعض الوقت")
-    for i, row in enumerate(active_notes[1:], start=2):
-        outbound_awb = row[6] if len(row) > 6 else ""
-        inbound_awb = row[7] if len(row) > 7 else ""
-        if outbound_awb:
-            st.info(f"🆔 {row[0]} | 🚚 Outbound: {outbound_awb} | الحالة: {get_aramex_status(outbound_awb)}")
-        if inbound_awb:
-            st.info(f"🆔 {row[0]} | 📦 Inbound: {inbound_awb} | الحالة: {get_aramex_status(inbound_awb)}")
-    for i, row in enumerate(responded_notes[1:], start=2):
-        outbound_awb = row[6] if len(row) > 6 else ""
-        inbound_awb = row[7] if len(row) > 7 else ""
-        if outbound_awb:
-            st.info(f"🆔 {row[0]} | 🚚 Outbound: {outbound_awb} | الحالة: {get_aramex_status(outbound_awb)}")
-        if inbound_awb:
-            st.info(f"🆔 {row[0]} | 📦 Inbound: {inbound_awb} | الحالة: {get_aramex_status(inbound_awb)}")
 
 # ====== البحث عن الشكوى ======
 st.header("🔍 البحث عن شكوى")
@@ -357,7 +337,7 @@ if len(active_notes) > 1:
 else:
     st.info("لا توجد شكاوى نشطة حالياً.")
 
-# ====== عرض الإجراءات المردودة ======
+# ====== عرض الإجراءات المردودة حسب النوع ======
 st.header("✅ الإجراءات المردودة حسب النوع:")
 responded_notes = responded_sheet.get_all_values()
 if len(responded_notes) > 1:
