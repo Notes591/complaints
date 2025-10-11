@@ -10,7 +10,7 @@ import re
 from streamlit_autorefresh import st_autorefresh
 
 # ====== تحديث تلقائي كل 60 ثانية ======
-st_autorefresh(interval=12000000, key="auto_refresh")  # 60 ثانية
+st_autorefresh(interval=360*1000, key="auto_refresh")  # 60 ثانية
 
 # ====== الاتصال بجوجل شيت ======
 scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
@@ -127,35 +127,22 @@ def extract_reference(tracking_result):
 def get_aramex_status(awb_number, search_type="Waybill"):
     try:
         headers = {"Content-Type": "application/json"}
-        if search_type == "Waybill":
-            payload = {
-                "ClientInfo": client_info,
-                "Shipments": [awb_number],
-                "Transaction": {"Reference1": "", "Reference2": "", "Reference3": "", "Reference4": "", "Reference5": ""},
-                "LabelInfo": None
-            }
-            url = "https://ws.aramex.net/ShippingAPI.V2/Tracking/Service_1_0.svc/json/TrackShipments"
-            response = requests.post(url, json=payload, headers=headers, timeout=5)
-        else:
-            payload = {
-                "ClientInfo": client_info,
-                "Transaction": {"Reference1": "", "Reference2": "", "Reference3": "", "Reference4": "", "Reference5": ""},
-                "ReferenceType": "ConsigneeReference",
-                "Reference": awb_number
-            }
-            url = "https://ws.aramex.net/ShippingAPI.V2/Tracking/Service_1_0.svc/json/TrackShipmentsByRef"
-            response = requests.post(url, json=payload, headers=headers, timeout=5)
-
+        payload = {
+            "ClientInfo": client_info,
+            "Shipments": [awb_number],
+            "Transaction": {"Reference1": "", "Reference2": "", "Reference3": "", "Reference4": "", "Reference5": ""},
+            "LabelInfo": None
+        }
+        url = "https://ws.aramex.net/ShippingAPI.V2/Tracking/Service_1_0.svc/json/TrackShipments"
+        response = requests.post(url, json=payload, headers=headers, timeout=5)
         if response.status_code != 200:
             return f"❌ فشل الاتصال - كود {response.status_code}"
-
         xml_content = response.content.decode('utf-8')
         xml_content = remove_xml_namespaces(xml_content)
         root = ET.fromstring(xml_content)
         tracking_results = root.find('TrackingResults')
         if tracking_results is None or len(tracking_results) == 0:
             return "❌ لا توجد حالة متاحة"
-
         keyvalue = tracking_results.find('KeyValueOfstringArrayOfTrackingResultmFAkxlpY')
         if keyvalue is not None:
             tracking_array = keyvalue.find('Value')
@@ -164,18 +151,12 @@ def get_aramex_status(awb_number, search_type="Waybill"):
                 if tracks:
                     last_track = sorted(tracks, key=lambda tr: tr.find('UpdateDateTime').text if tr.find('UpdateDateTime') is not None else '', reverse=True)[0]
                     desc = last_track.find('UpdateDescription').text if last_track.find('UpdateDescription') is not None else "—"
-                    date = last_track.find('UpdateDateTime').text if last_track.find('UpdateDateTime') is not None else "—"
-                    loc = last_track.find('UpdateLocation').text if last_track.find('UpdateLocation') is not None else "—"
-                    reference = extract_reference(last_track)
-                    info = f"{desc} بتاريخ {date} في {loc}"
-                    if reference:
-                        info += f" | الرقم المرجعي: {reference}"
-                    return info
+                    return desc
         return "❌ لا توجد حالة متاحة"
     except Exception as e:
         return f"خطأ في جلب الحالة: {e}"
 
-# ====== دالة عرض الشكوى داخل form ======
+# ====== دالة عرض الشكوى ======
 def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
     comp_id, comp_type, notes, action, date_added = row[:5]
     restored = row[5] if len(row) > 5 else ""
@@ -251,7 +232,7 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
                     safe_delete(sheet, i)
                     st.success("✅ اتنقلت للنشطة")
 
-# ====== البحث عن الشكوى ======
+# ====== البحث ======
 st.header("🔍 البحث عن شكوى")
 search_id = st.text_input("أدخل رقم الشكوى للبحث")
 if search_id.strip():
@@ -260,7 +241,7 @@ if search_id.strip():
     for i, row in enumerate(active_notes[1:], start=2):
         if str(row[0]) == search_id:
             st.success(f"✅ الشكوى موجودة في النشطة")
-            render_complaint(complaints_sheet, i, row, in_responded=False, in_archive=False)
+            render_complaint(complaints_sheet, i, row)
             found = True
             break
     if not found:
@@ -329,11 +310,11 @@ st.header("📋 الشكاوى النشطة:")
 active_notes = complaints_sheet.get_all_values()
 if len(active_notes) > 1:
     for i, row in enumerate(active_notes[1:], start=2):
-        render_complaint(complaints_sheet, i, row, in_responded=False, in_archive=False)
+        render_complaint(complaints_sheet, i, row)
 else:
     st.info("لا توجد شكاوى نشطة حالياً.")
 
-# ====== عرض الإجراءات المردودة بتبويبات لكل نوع وجاهز للمتابعة 1 و2 ======
+# ====== عرض الإجراءات المردودة ======
 st.header("✅ الإجراءات المردودة حسب النوع:")
 responded_notes = responded_sheet.get_all_values()
 if len(responded_notes) > 1:
@@ -344,24 +325,27 @@ if len(responded_notes) > 1:
 
             followup_1 = []
             followup_2 = []
+            others = []
+
             for i, row in type_rows:
+                comp_id = row[0]
                 outbound_awb = row[6] if len(row) > 6 else ""
                 inbound_awb = row[7] if len(row) > 7 else ""
+                rw_record = get_returnwarehouse_record(comp_id)
 
-                # تحقق من حالة أرامكس
-                delivered_in_aramex = False
+                # تحقق من حالة Delivered
+                delivered = False
                 for awb in [outbound_awb, inbound_awb]:
                     if awb and "Delivered" in get_aramex_status(awb):
-                        delivered_in_aramex = True
+                        delivered = True
                         break
 
-                # تحقق من وجود سجل ReturnWarehouse
-                rw_record = get_returnwarehouse_record(row[0])
-
-                if delivered_in_aramex and rw_record:
-                    followup_2.append((i, row))  # Delivered + له سجل ReturnWarehouse
-                elif delivered_in_aramex and not rw_record:
-                    followup_1.append((i, row))  # Delivered فقط بدون سجل ReturnWarehouse
+                if delivered and rw_record:
+                    followup_2.append((i, row))
+                elif delivered and not rw_record:
+                    followup_1.append((i, row))
+                else:
+                    others.append((i, row))
 
             if followup_1:
                 with st.expander("📋 جاهز للمتابعة 1"):
@@ -372,66 +356,10 @@ if len(responded_notes) > 1:
                 with st.expander("📋 جاهز للمتابعة 2"):
                     for i, row in followup_2:
                         render_complaint(responded_sheet, i, row, in_responded=True)
+
+            if others:
+                with st.expander("📋 غير جاهز للمتابعة"):
+                    for i, row in others:
+                        render_complaint(responded_sheet, i, row, in_responded=True)
 else:
     st.info("لا توجد شكاوى مردودة حالياً.")
-
-# ====== عرض الأرشيف بعد المردود مع 50 فقط بشكل افتراضي + زر المزيد ======
-st.header("📦 الأرشيف:")
-archived = archive_sheet.get_all_values()
-if len(archived) > 1:
-    if "archive_show_count" not in st.session_state:
-        st.session_state["archive_show_count"] = 50
-    show_count = st.session_state["archive_show_count"]
-
-    for i, row in enumerate(archived[1:show_count+1], start=2):
-        render_complaint(archive_sheet, i, row, in_archive=True)
-
-    if show_count < len(archived) - 1:
-        if st.button("المزيد..."):
-            st.session_state["archive_show_count"] = show_count + 50
-            st.experimental_rerun()
-else:
-    st.info("لا يوجد شكاوى في الأرشيف.")
-
-# ====== معلق أرامكس ======
-st.header("🚚 معلق ارامكس")
-with st.form("add_aramex", clear_on_submit=True):
-    order_id = st.text_input("🔢 رقم الطلب")
-    status = st.text_input("📌 الحالة")
-    action = st.text_area("✅ الإجراء المتخذ")
-    submitted = st.form_submit_button("➕ إضافة")
-    if submitted:
-        if order_id.strip() and status.strip() and action.strip():
-            date_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            safe_append(aramex_sheet, [order_id, status, date_now, action])
-            st.success("✅ تم تسجيل الطلب")
-        else:
-            st.error("⚠️ لازم تدخل رقم الطلب + الحالة + الإجراء")
-
-st.subheader("📋 قائمة الطلبات المعلقة")
-aramex_data = aramex_sheet.get_all_values()
-if len(aramex_data) > 1:
-    for i, row in enumerate(aramex_data[1:], start=2):
-        order_id, status, date_added, action = row[:4]
-        with st.expander(f"📦 طلب {order_id}"):
-            st.write(f"📌 الحالة الحالية: {status}")
-            st.write(f"✅ الإجراء الحالي: {action}")
-            st.caption(f"📅 تاريخ الإضافة: {date_added}")
-            with st.form(key=f"form_aramex_{order_id}"):
-                new_status = st.text_input("✏️ عدل الحالة", value=status)
-                new_action = st.text_area("✏️ عدل الإجراء", value=action)
-                col1, col2, col3 = st.columns(3)
-                submitted_save = col1.form_submit_button("💾 حفظ")
-                submitted_delete = col2.form_submit_button("🗑️ حذف")
-                submitted_archive = col3.form_submit_button("📦 أرشفة")
-                if submitted_save:
-                    safe_update(aramex_sheet, f"B{i}", [[new_status]])
-                    safe_update(aramex_sheet, f"D{i}", [[new_action]])
-                    st.success("✅ تم تعديل الطلب")
-                if submitted_delete:
-                    safe_delete(aramex_sheet, i)
-                    st.warning("🗑️ تم حذف الطلب")
-                if submitted_archive:
-                    safe_append(aramex_archive, [order_id, new_status, date_added, new_action])
-                    safe_delete(aramex_sheet, i)
-                    st.success("♻️ تم أرشفة الطلب")
