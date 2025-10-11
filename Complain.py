@@ -125,6 +125,7 @@ def extract_reference(tracking_result):
             return ref_elem.text.strip()
     return ""
 
+@lru_cache(maxsize=128)
 def get_aramex_status(awb_number, search_type="Waybill"):
     try:
         headers = {"Content-Type": "application/json"}
@@ -176,11 +177,6 @@ def get_aramex_status(awb_number, search_type="Waybill"):
     except Exception as e:
         return f"خطأ في جلب الحالة: {e}"
 
-# ====== Cache لحالة أرامكس لتسريع التحديث ======
-@lru_cache(maxsize=128)
-def get_aramex_status_cached(awb_number):
-    return get_aramex_status(awb_number)
-
 # ====== دالة عرض الشكوى داخل form ======
 def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
     comp_id, comp_type, notes, action, date_added = row[:5]
@@ -217,9 +213,9 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
             new_inbound = st.text_input("✏️ Inbound AWB", value=inbound_awb)
 
             if new_outbound:
-                st.info(f"🚚 Outbound AWB: {new_outbound} | الحالة: {get_aramex_status_cached(new_outbound)}")
+                st.info(f"🚚 Outbound AWB: {new_outbound} | الحالة: {get_aramex_status(new_outbound)}")
             if new_inbound:
-                st.info(f"📦 Inbound AWB: {new_inbound} | الحالة: {get_aramex_status_cached(new_inbound)}")
+                st.info(f"📦 Inbound AWB: {new_inbound} | الحالة: {get_aramex_status(new_inbound)}")
 
             col1, col2, col3, col4 = st.columns(4)
             submitted_save = col1.form_submit_button("💾 حفظ")
@@ -251,11 +247,11 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
                 if not in_responded:
                     safe_append(responded_sheet, [comp_id, new_type, new_notes, new_action, date_added, restored, new_outbound, new_inbound])
                     safe_delete(sheet, i)
-                    st.success("✅ انتقلت للإجراءات المردودة")
+                    st.success("✅ اتنقلت للإجراءات المردودة")
                 else:
                     safe_append(complaints_sheet, [comp_id, new_type, new_notes, new_action, date_added, restored, new_outbound, new_inbound])
                     safe_delete(sheet, i)
-                    st.success("✅ انتقلت للنشطة")
+                    st.success("✅ اتنقلت للنشطة")
 
 # ====== البحث عن الشكوى ======
 st.header("🔍 البحث عن شكوى")
@@ -339,56 +335,62 @@ if len(active_notes) > 1:
 else:
     st.info("لا توجد شكاوى نشطة حالياً.")
 
-# ====== عرض الإجراءات المردودة مع تصنيف جاهز للمتابعة ======
-st.header("✅ الإجراءات المردودة:")
-
+# ====== عرض الإجراءات المردودة بتبويبات لكل نوع + متابعة التوصيل وReturnWarehouse ======
+st.header("✅ الإجراءات المردودة حسب النوع:")
 responded_notes = responded_sheet.get_all_values()
 if len(responded_notes) > 1:
-    ready_followup_1 = []
-    ready_followup_2 = []
-    normal_rows = []
+    types_in_responded = list({row[1] for row in responded_notes[1:]})
+    for complaint_type in types_in_responded:
+        with st.expander(f"📌 نوع الشكوى: {complaint_type}"):
+            type_rows = [(i, row) for i, row in enumerate(responded_notes[1:], start=2) if row[1] == complaint_type]
+            for i, row in type_rows:
+                comp_id = row[0]
+                outbound_awb = row[6] if len(row) > 6 else ""
+                inbound_awb = row[7] if len(row) > 7 else ""
 
-    for i, row in enumerate(responded_notes[1:], start=2):
-        comp_id = row[0]
-        outbound_awb = row[6] if len(row) > 6 else ""
-        inbound_awb = row[7] if len(row) > 7 else ""
+                # ====== فحص Delivered ======
+                delivered_msgs = []
+                for awb, direction in [(outbound_awb, "Outbound"), (inbound_awb, "Inbound")]:
+                    if awb:
+                        status = get_aramex_status(awb)
+                        if "Delivered" in status:
+                            match = re.search(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}", status)
+                            delivered_date = match.group(0) if match else "—"
+                            delivered_msgs.append(f"{direction} AWB: {awb} تم توصيلها بتاريخ {delivered_date}")
 
-        delivered = False
-        for awb in [outbound_awb, inbound_awb]:
-            if awb:
-                status = get_aramex_status_cached(awb)
-                if "Delivered" in status:
-                    delivered = True
-                    break
+                # ====== فحص ReturnWarehouse ======
+                rw_record = get_returnwarehouse_record(comp_id)
+                rw_msg = None
+                if rw_record:
+                    rw_msg = (
+                        f"📦 بيانات ReturnWarehouse للشكوى {comp_id}:\n"
+                        f"رقم الطلب: {rw_record['رقم الطلب']}\n"
+                        f"الفاتورة: {rw_record['الفاتورة']}\n"
+                        f"التاريخ: {rw_record['التاريخ']}\n"
+                        f"الزبون: {rw_record['الزبون']}\n"
+                        f"المبلغ: {rw_record['المبلغ']}\n"
+                        f"رقم الشحنة: {rw_record['رقم الشحنة']}\n"
+                        f"البيان: {rw_record['البيان']}"
+                    )
 
-        rw_record = get_returnwarehouse_record(comp_id)
+                # ====== عرض الإشعارات ======
+                if delivered_msgs and rw_msg:
+                    st.warning(f"🚨🚨🚨 الشكوى {comp_id} تم توصيلها ولديها بيانات ReturnWarehouse! 📦📅")
+                    for msg in delivered_msgs:
+                        st.write(f"- {msg}")
+                    st.info(rw_msg)
+                elif delivered_msgs:
+                    st.warning(f"🚨🚨🚨 الشكوى {comp_id} تم توصيلها! 📦")
+                    for msg in delivered_msgs:
+                        st.write(f"- {msg}")
+                elif rw_msg:
+                    st.info(rw_msg)
 
-        if rw_record and delivered:
-            ready_followup_2.append((i, row))
-        elif delivered:
-            ready_followup_1.append((i, row))
-        else:
-            normal_rows.append((i, row))
-
-    # عرض الشكاوى العادية
-    for i, row in normal_rows:
-        render_complaint(responded_sheet, i, row, in_responded=True)
-
-    # عرض جاهز للمتابعة 1
-    if ready_followup_1:
-        st.subheader("📌 جاهز للمتابعة 1")
-        for i, row in ready_followup_1:
-            render_complaint(responded_sheet, i, row, in_responded=True)
-
-    # عرض جاهز للمتابعة 2
-    if ready_followup_2:
-        st.subheader("📌 جاهز للمتابعة 2")
-        for i, row in ready_followup_2:
-            render_complaint(responded_sheet, i, row, in_responded=True)
+                render_complaint(responded_sheet, i, row, in_responded=True)
 else:
     st.info("لا توجد شكاوى مردودة حالياً.")
 
-# ====== عرض الأرشيف بعد المردود مع 50 فقط بشكل افتراضي + زر المزيد ======
+# ====== عرض الأرشيف ======
 st.header("📦 الأرشيف:")
 archived = archive_sheet.get_all_values()
 if len(archived) > 1:
