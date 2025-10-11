@@ -355,14 +355,13 @@ if len(responded_notes) > 1:
                         delivered_in_aramex = True
                         break
 
-                # تحقق من سجل ReturnWarehouse وحالة البيان
+                # تحقق من وجود سجل ReturnWarehouse
                 rw_record = get_returnwarehouse_record(row[0])
-                delivered_in_rw = rw_record and "Delivered" in rw_record.get("البيان", "")
 
-                if delivered_in_aramex and delivered_in_rw:
-                    followup_2.append((i, row))  # Delivered في أرامكس ولها سجل Delivered
-                elif delivered_in_aramex and not delivered_in_rw:
-                    followup_1.append((i, row))  # Delivered في أرامكس فقط، بدون سجل Delivered
+                if delivered_in_aramex and rw_record:
+                    followup_2.append((i, row))  # Delivered + له سجل ReturnWarehouse
+                elif delivered_in_aramex and not rw_record:
+                    followup_1.append((i, row))  # Delivered فقط بدون سجل ReturnWarehouse
 
             if followup_1:
                 with st.expander("📋 جاهز للمتابعة 1"):
