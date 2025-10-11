@@ -134,7 +134,7 @@ def get_aramex_status(awb_number, search_type="Waybill"):
             "LabelInfo": None
         }
         url = "https://ws.aramex.net/ShippingAPI.V2/Tracking/Service_1_0.svc/json/TrackShipments"
-        response = requests.post(url, json=payload, headers=headers, timeout=5)
+        response = requests.post(url, json=payload, headers=headers, timeout=10)
         if response.status_code != 200:
             return f"❌ فشل الاتصال - كود {response.status_code}"
         xml_content = response.content.decode('utf-8')
@@ -151,7 +151,13 @@ def get_aramex_status(awb_number, search_type="Waybill"):
                 if tracks:
                     last_track = sorted(tracks, key=lambda tr: tr.find('UpdateDateTime').text if tr.find('UpdateDateTime') is not None else '', reverse=True)[0]
                     desc = last_track.find('UpdateDescription').text if last_track.find('UpdateDescription') is not None else "—"
-                    return desc
+                    date = last_track.find('UpdateDateTime').text if last_track.find('UpdateDateTime') is not None else "—"
+                    loc = last_track.find('UpdateLocation').text if last_track.find('UpdateLocation') is not None else "—"
+                    reference = extract_reference(last_track)
+                    info = f"{desc} بتاريخ {date} في {loc}"
+                    if reference:
+                        info += f" | الرقم المرجعي: {reference}"
+                    return info
         return "❌ لا توجد حالة متاحة"
     except Exception as e:
         return f"خطأ في جلب الحالة: {e}"
@@ -226,40 +232,26 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
                 if not in_responded:
                     safe_append(responded_sheet, [comp_id, new_type, new_notes, new_action, date_added, restored, new_outbound, new_inbound])
                     safe_delete(sheet, i)
-                    st.success("✅ اتنقلت للإجراءات المردودة")
+                    st.success("✅ انتقلت للإجراءات المردودة")
                 else:
                     safe_append(complaints_sheet, [comp_id, new_type, new_notes, new_action, date_added, restored, new_outbound, new_inbound])
                     safe_delete(sheet, i)
-                    st.success("✅ اتنقلت للنشطة")
+                    st.success("✅ انتقلت للنشطة")
 
 # ====== البحث عن شكوى ======
 st.header("🔍 البحث عن شكوى")
 search_id = st.text_input("أدخل رقم الشكوى للبحث")
 if search_id.strip():
     found = False
-    active_notes = complaints_sheet.get_all_values()
-    for i, row in enumerate(active_notes[1:], start=2):
-        if str(row[0]) == search_id:
-            st.success(f"✅ الشكوى موجودة في النشطة")
-            render_complaint(complaints_sheet, i, row)
-            found = True
-            break
-    if not found:
-        responded_notes = responded_sheet.get_all_values()
-        for i, row in enumerate(responded_notes[1:], start=2):
+    for sheet, in_responded, in_archive in [(complaints_sheet, False, False), (responded_sheet, True, False), (archive_sheet, False, True)]:
+        data = sheet.get_all_values()
+        for i, row in enumerate(data[1:], start=2):
             if str(row[0]) == search_id:
-                st.success(f"✅ الشكوى موجودة في المردودة")
-                render_complaint(responded_sheet, i, row, in_responded=True)
+                st.success(f"✅ الشكوى موجودة في {'المردودة' if in_responded else 'الأرشيف' if in_archive else 'النشطة'}")
+                render_complaint(sheet, i, row, in_responded=in_responded, in_archive=in_archive)
                 found = True
                 break
-    if not found:
-        archived = archive_sheet.get_all_values()
-        for i, row in enumerate(archived[1:], start=2):
-            if str(row[0]) == search_id:
-                st.success(f"✅ الشكوى موجودة في الأرشيف")
-                render_complaint(archive_sheet, i, row, in_archive=True)
-                found = True
-                break
+        if found: break
     if not found:
         st.error("⚠️ لم يتم العثور على الشكوى")
 
@@ -362,4 +354,40 @@ if len(responded_notes) > 1:
                     for i, row in others:
                         render_complaint(responded_sheet, i, row, in_responded=True)
 else:
-    st.info("لا توجد شكاوى في الإجراءات المردودة حالياً.")
+    st.info("لا توجد شكاوى مردودة حالياً.")
+
+# ====== عرض الأرشيف ======
+st.header("📦 الأرشيف:")
+archived = archive_sheet.get_all_values()
+if len(archived) > 1:
+    if "archive_show_count" not in st.session_state:
+        st.session_state["archive_show_count"] = 50
+    show_count = st.session_state["archive_show_count"]
+
+    for i, row in enumerate(archived[1:show_count+1], start=2):
+        render_complaint(archive_sheet, i, row, in_archive=True)
+
+    if show_count < len(archived) - 1:
+        if st.button("المزيد..."):
+            st.session_state["archive_show_count"] += 50
+            st.experimental_rerun()
+else:
+    st.info("لا توجد شكاوى مؤرشفة حالياً.")
+
+# ====== عرض معلق أرامكس ======
+st.header("📦 معلق أرامكس:")
+aramex_pending = aramex_sheet.get_all_values()
+if len(aramex_pending) > 1:
+    for i, row in enumerate(aramex_pending[1:], start=2):
+        render_complaint(aramex_sheet, i, row)
+else:
+    st.info("لا توجد شكاوى أرامكس معلقة.")
+
+# ====== عرض أرشيف أرامكس ======
+st.header("📦 أرشيف أرامكس:")
+aramex_archived = aramex_archive.get_all_values()
+if len(aramex_archived) > 1:
+    for i, row in enumerate(aramex_archived[1:], start=2):
+        render_complaint(aramex_archive, i, row, in_archive=True)
+else:
+    st.info("لا توجد شكاوى أرامكس مؤرشفة.")
