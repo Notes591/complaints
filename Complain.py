@@ -333,25 +333,22 @@ if len(active_notes) > 1:
 else:
     st.info("لا توجد شكاوى نشطة حالياً.")
 
-# ====== عرض الإجراءات المردودة بتبويبات لكل نوع ======
+# ====== عرض الإجراءات المردودة بتبويبات لكل نوع + جاهز للمتابعة ======
 st.header("✅ الإجراءات المردودة حسب النوع:")
 
 responded_notes = responded_sheet.get_all_values()
 if len(responded_notes) > 1:
-    # إنشاء قائمة أنواع موجودة في المردود
     types_in_responded = list({row[1] for row in responded_notes[1:]})
-    
+    ready_for_followup = []
+
     for complaint_type in types_in_responded:
         with st.expander(f"📌 نوع الشكوى: {complaint_type}"):
-            # جمع كل الشكاوى لهذا النوع
             type_rows = [(i, row) for i, row in enumerate(responded_notes[1:], start=2) if row[1] == complaint_type]
-            
             for i, row in type_rows:
                 comp_id = row[0]
                 outbound_awb = row[6] if len(row) > 6 else ""
                 inbound_awb = row[7] if len(row) > 7 else ""
 
-                # ====== فحص Delivered ======
                 delivered_msgs = []
                 for awb, direction in [(outbound_awb, "Outbound"), (inbound_awb, "Inbound")]:
                     if awb:
@@ -361,7 +358,6 @@ if len(responded_notes) > 1:
                             delivered_date = match.group(0) if match else "—"
                             delivered_msgs.append(f"{direction} AWB: {awb} تم توصيلها بتاريخ {delivered_date}")
 
-                # ====== فحص ReturnWarehouse ======
                 rw_record = get_returnwarehouse_record(comp_id)
                 rw_msg = None
                 if rw_record:
@@ -375,8 +371,8 @@ if len(responded_notes) > 1:
                         f"رقم الشحنة: {rw_record['رقم الشحنة']}\n"
                         f"البيان: {rw_record['البيان']}"
                     )
+                    ready_for_followup.append((i, row, rw_msg))
 
-                # ====== عرض الإشعارات ======
                 if delivered_msgs and rw_msg:
                     st.warning(f"🚨🚨🚨 الشكوى {comp_id} تم توصيلها ولديها بيانات ReturnWarehouse! 📦📅")
                     for msg in delivered_msgs:
@@ -390,6 +386,14 @@ if len(responded_notes) > 1:
                     st.info(rw_msg)
 
                 render_complaint(responded_sheet, i, row, in_responded=True)
+
+    if ready_for_followup:
+        st.header("📌 جاهز للمتابعة:")
+        for i, row, rw_msg in ready_for_followup:
+            comp_id = row[0]
+            st.info(f"📦 الشكوى {comp_id} جاهزة للمتابعة")
+            st.write(rw_msg)
+            render_complaint(responded_sheet, i, row, in_responded=True)
 else:
     st.info("لا توجد شكاوى مردودة حالياً.")
 
