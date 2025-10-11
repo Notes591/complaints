@@ -347,7 +347,7 @@ if len(responded_notes) > 1:
             for i, row in type_rows:
                 outbound_awb = row[6] if len(row) > 6 else ""
                 inbound_awb = row[7] if len(row) > 7 else ""
-                
+
                 # تحقق من حالة أرامكس
                 delivered_in_aramex = False
                 for awb in [outbound_awb, inbound_awb]:
@@ -355,14 +355,14 @@ if len(responded_notes) > 1:
                         delivered_in_aramex = True
                         break
 
-                # تحقق من سجل ReturnWarehouse
+                # تحقق من سجل ReturnWarehouse وحالة البيان
                 rw_record = get_returnwarehouse_record(row[0])
                 delivered_in_rw = rw_record and "Delivered" in rw_record.get("البيان", "")
 
                 if delivered_in_aramex and delivered_in_rw:
-                    followup_2.append((i, row))  # الحالة والريترن ويرهاوس موجودة
+                    followup_2.append((i, row))  # Delivered في أرامكس ولها سجل Delivered
                 elif delivered_in_aramex and not delivered_in_rw:
-                    followup_1.append((i, row))  # Delivered فقط في أرامكس، بدون سجل
+                    followup_1.append((i, row))  # Delivered في أرامكس فقط، بدون سجل Delivered
 
             if followup_1:
                 with st.expander("📋 جاهز للمتابعة 1"):
