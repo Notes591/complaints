@@ -252,76 +252,40 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False, fetch_
                     safe_delete(sheet, i)
                     st.success("✅ اتنقلت للنشطة")
 
-# ====== أزرار تحديث عام للـ AWB ======
-st.header("🔄 تحديث حالات AWB للشكاوى النشطة والمردودة")
-if "fetch_awb_results_active" not in st.session_state:
-    st.session_state.fetch_awb_results_active = {}
-if "fetch_awb_results_responded" not in st.session_state:
-    st.session_state.fetch_awb_results_responded = {}
-
-col_active, col_responded = st.columns(2)
-if col_active.button("تحديث الكل النشطة"):
-    st.session_state.fetch_awb_results_active = {}
-    active_notes = complaints_sheet.get_all_values()[1:]
-    for i, row in enumerate(active_notes, start=2):
+# ====== زر تحديث كل AWB النشطة والمردودة ======
+st.header("🔄 تحديث كل حالات AWB")
+if st.button("تحديث كل Outbound وInbound للشكاوى"):
+    st.info("⏳ جاري تحديث جميع حالات AWB النشطة والمردودة...")
+    fetch_awb_results = {}
+    # تحديث الشكاوى النشطة
+    active_notes = complaints_sheet.get_all_values()
+    for i, row in enumerate(active_notes[1:], start=2):
         comp_id = row[0]
         outbound_awb = row[6] if len(row) > 6 else ""
         inbound_awb = row[7] if len(row) > 7 else ""
         if outbound_awb:
-            st.session_state.fetch_awb_results_active[f"{comp_id}_out"] = get_aramex_status(outbound_awb)
+            fetch_awb_results[f"{comp_id}_out"] = get_aramex_status(outbound_awb)
         if inbound_awb:
-            st.session_state.fetch_awb_results_active[f"{comp_id}_in"] = get_aramex_status(inbound_awb)
-    st.success("✅ تم تحديث جميع الشحنات النشطة")
-
-if col_responded.button("تحديث الكل المردودة"):
-    st.session_state.fetch_awb_results_responded = {}
-    responded_notes = responded_sheet.get_all_values()[1:]
-    for i, row in enumerate(responded_notes, start=2):
+            fetch_awb_results[f"{comp_id}_in"] = get_aramex_status(inbound_awb)
+    # تحديث الشكاوى المردودة
+    responded_notes = responded_sheet.get_all_values()
+    for i, row in enumerate(responded_notes[1:], start=2):
         comp_id = row[0]
         outbound_awb = row[6] if len(row) > 6 else ""
         inbound_awb = row[7] if len(row) > 7 else ""
         if outbound_awb:
-            st.session_state.fetch_awb_results_responded[f"{comp_id}_out"] = get_aramex_status(outbound_awb)
+            fetch_awb_results[f"{comp_id}_out"] = get_aramex_status(outbound_awb)
         if inbound_awb:
-            st.session_state.fetch_awb_results_responded[f"{comp_id}_in"] = get_aramex_status(inbound_awb)
-    st.success("✅ تم تحديث جميع الشحنات المردودة")
+            fetch_awb_results[f"{comp_id}_in"] = get_aramex_status(inbound_awb)
+    st.success("✅ تم تحديث جميع حالات AWB")
 
-# ====== عرض الشكاوى النشطة ======
+# ====== بقية الكود: البحث، تسجيل جديد، عرض نشطة، مردودة، أرشيف، أرامكس ======
+# يمكنك استخدام نفس الأكواد الموجودة سابقاً مع تمرير fetch_awb_results للـ render_complaint
+# مثال على عرض الشكاوى النشطة مع نتائج AWB
 st.header("📋 الشكاوى النشطة:")
 active_notes = complaints_sheet.get_all_values()
 if len(active_notes) > 1:
     for i, row in enumerate(active_notes[1:], start=2):
-        render_complaint(complaints_sheet, i, row, in_responded=False, in_archive=False, fetch_awb_results=st.session_state.fetch_awb_results_active)
+        render_complaint(complaints_sheet, i, row, in_responded=False, in_archive=False, fetch_awb_results=st.session_state.get("fetch_awb_results", {}))
 else:
     st.info("لا توجد شكاوى نشطة حالياً.")
-
-# ====== عرض الإجراءات المردودة حسب النوع مع إضافة بنود المتابعة ======
-st.header("✅ الإجراءات المردودة حسب النوع:")
-responded_notes = responded_sheet.get_all_values()
-if len(responded_notes) > 1:
-    types_in_responded = list({row[1] for row in responded_notes[1:]})
-    for complaint_type in types_in_responded:
-        with st.expander(f"📌 نوع الشكوى: {complaint_type}"):
-            type_rows = [(i, row) for i, row in enumerate(responded_notes[1:], start=2) if row[1] == complaint_type]
-            for i, row in type_rows:
-                comp_id = row[0]
-                outbound_awb = row[6] if len(row) > 6 else ""
-                inbound_awb = row[7] if len(row) > 7 else ""
-
-                # ====== AWB مخزن في session state ======
-                fetch_awb_results = st.session_state.fetch_awb_results_responded
-                render_complaint(responded_sheet, i, row, in_responded=True, fetch_awb_results=fetch_awb_results)
-
-                # ====== فحص ReturnWarehouse وDelivered ======
-                rw_record = get_returnwarehouse_record(comp_id)
-                delivered_out = outbound_awb and fetch_awb_results.get(f"{comp_id}_out", "").lower().find("delivered") != -1
-                delivered_in = inbound_awb and fetch_awb_results.get(f"{comp_id}_in", "").lower().find("delivered") != -1
-                has_delivered = delivered_out or delivered_in
-
-                # ====== إضافة بند متابعة جديد ======
-                if rw_record and has_delivered:
-                    st.warning(f"🔹 جاهز للمتابعة 2: الشكوى {comp_id} تم توصيلها ولديها بيانات ReturnWarehouse")
-                elif rw_record and not has_delivered:
-                    st.info(f"🔹 جاهز للمتابعة 1: الشكوى {comp_id} لديها بيانات ReturnWarehouse")
-else:
-    st.info("لا توجد شكاوى مردودة حالياً.")
