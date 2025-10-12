@@ -164,10 +164,14 @@ def get_aramex_status(awb_number, search_type="Waybill"):
 
 # ====== دالة عرض الشكوى ======
 def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
+    # ✅ إصلاح مشكلة الصفوف الناقصة (مثل معلق أرامكس)
+    while len(row) < 8:
+        row.append("")
+
     comp_id, comp_type, notes, action, date_added = row[:5]
-    restored = row[5] if len(row) > 5 else ""
-    outbound_awb = row[6] if len(row) > 6 else ""
-    inbound_awb = row[7] if len(row) > 7 else ""
+    restored = row[5]
+    outbound_awb = row[6]
+    inbound_awb = row[7]
 
     order_status = get_order_status(comp_id)
 
@@ -325,7 +329,6 @@ if len(responded_notes) > 1:
                 inbound_awb = row[7] if len(row) > 7 else ""
                 rw_record = get_returnwarehouse_record(comp_id)
 
-                # تحقق من حالة Delivered
                 delivered = False
                 for awb in [outbound_awb, inbound_awb]:
                     if awb and "Delivered" in get_aramex_status(awb):
@@ -363,12 +366,10 @@ if len(archived) > 1:
     if "archive_show_count" not in st.session_state:
         st.session_state["archive_show_count"] = 50
     show_count = st.session_state["archive_show_count"]
-
-    for i, row in enumerate(archived[1:show_count+1], start=2):
+    for i, row in enumerate(archived[1:show_count], start=2):
         render_complaint(archive_sheet, i, row, in_archive=True)
-
-    if show_count < len(archived) - 1:
-        if st.button("المزيد..."):
+    if len(archived) - 1 > show_count:
+        if st.button("عرض المزيد من الأرشيف"):
             st.session_state["archive_show_count"] += 50
             st.experimental_rerun()
 else:
