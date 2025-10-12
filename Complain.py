@@ -9,8 +9,8 @@ import xml.etree.ElementTree as ET
 import re
 from streamlit_autorefresh import st_autorefresh
 
-# ====== تحديث تلقائي كل 60 ثانية ======
-st_autorefresh(interval=12000000, key="auto_refresh")  # 60 ثانية
+# ====== تحديث تلقائي كل 20 دقيقة ======
+st_autorefresh(interval=1200*1000, key="auto_refresh")  # 20 دقيقة
 
 # ====== الاتصال بجوجل شيت ======
 scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
@@ -38,10 +38,14 @@ st.set_page_config(page_title="📢 نظام الشكاوى", page_icon="⚠️"
 st.title("⚠️ نظام إدارة الشكاوى")
 
 # ====== تحميل الأنواع ======
-types_list = [row[0] for row in types_sheet.get_all_values()[1:]]
+@st.cache_data(ttl=300)
+def get_sheet_data(sheet):
+    return sheet.get_all_values()
+
+types_list = [row[0] for row in get_sheet_data(types_sheet)[1:]]
 
 # ====== بيانات ReturnWarehouse ======
-return_warehouse_data = return_warehouse_sheet.get_all_values()[1:]
+return_warehouse_data = get_sheet_data(return_warehouse_sheet)[1:]
 def get_returnwarehouse_record(order_id):
     for row in return_warehouse_data:
         if str(row[0]) == str(order_id):
@@ -57,7 +61,7 @@ def get_returnwarehouse_record(order_id):
     return None
 
 # ====== بيانات Order Number ======
-order_number_data = order_number_sheet.get_all_values()[1:]
+order_number_data = get_sheet_data(order_number_sheet)[1:]
 def get_order_status(order_id):
     for row in order_number_data:
         if str(row[1]) == str(order_id):
@@ -65,16 +69,18 @@ def get_order_status(order_id):
             if delegate.strip().lower() == "aramex":
                 return "📦 مشحونة مع أرامكس الطلب الاساسي"
             elif delegate.strip():
-                return f" الطلب الاساسي🚚 مشحونة مع مندوب الرياض ({delegate})"
+                return f"🚚 مشحونة مع مندوب الرياض ({delegate})"
             else:
-                return "الطلب الاساسي⏳ تحت المتابعة"
+                return "⏳ الطلب الاساسي تحت المتابعة"
     return "⏳ تحت المتابعة"
 
 # ====== دوال Retry ======
 def safe_append(sheet, row_data, retries=5, delay=1):
     for attempt in range(retries):
         try:
-            sheet.append_row(row_data)
+            with st.spinner("🔄 جاري الحفظ..."):
+                sheet.append_row(row_data)
+            st.toast("✅ تم الحفظ بنجاح")
             return True
         except gspread.exceptions.APIError:
             time.sleep(delay)
@@ -84,7 +90,9 @@ def safe_append(sheet, row_data, retries=5, delay=1):
 def safe_update(sheet, cell_range, values, retries=5, delay=1):
     for attempt in range(retries):
         try:
-            sheet.update(cell_range, values)
+            with st.spinner("🔄 جاري التحديث..."):
+                sheet.update(cell_range, values)
+            st.toast("✅ تم التحديث بنجاح")
             return True
         except gspread.exceptions.APIError:
             time.sleep(delay)
@@ -94,7 +102,9 @@ def safe_update(sheet, cell_range, values, retries=5, delay=1):
 def safe_delete(sheet, row_index, retries=5, delay=1):
     for attempt in range(retries):
         try:
-            sheet.delete_rows(row_index)
+            with st.spinner("🗑️ جاري الحذف..."):
+                sheet.delete_rows(row_index)
+            st.toast("🗑️ تم الحذف")
             return True
         except gspread.exceptions.APIError:
             time.sleep(delay)
@@ -130,7 +140,7 @@ def get_aramex_status(awb_number, search_type="Waybill"):
         payload = {
             "ClientInfo": client_info,
             "Shipments": [awb_number],
-            "Transaction": {"Reference1": "", "Reference2": "", "Reference3": "", "Reference4": "", "Reference5": ""},
+            "Transaction": {},
             "LabelInfo": None
         }
         url = "https://ws.aramex.net/ShippingAPI.V2/Tracking/Service_1_0.svc/json/TrackShipments"
@@ -164,14 +174,10 @@ def get_aramex_status(awb_number, search_type="Waybill"):
 
 # ====== دالة عرض الشكوى ======
 def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
-    # ✅ إصلاح مشكلة الصفوف الناقصة (مثل معلق أرامكس)
     while len(row) < 8:
         row.append("")
-
     comp_id, comp_type, notes, action, date_added = row[:5]
-    restored = row[5]
-    outbound_awb = row[6]
-    inbound_awb = row[7]
+    restored, outbound_awb, inbound_awb = row[5:8]
 
     order_status = get_order_status(comp_id)
 
@@ -210,10 +216,7 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
             submitted_save = col1.form_submit_button("💾 حفظ")
             submitted_delete = col2.form_submit_button("🗑️ حذف")
             submitted_archive = col3.form_submit_button("📦 أرشفة")
-            if not in_responded:
-                submitted_move = col4.form_submit_button("➡️ نقل للإجراءات المردودة")
-            else:
-                submitted_move = col4.form_submit_button("⬅️ رجوع للنشطة")
+            submitted_move = col4.form_submit_button("➡️ نقل" if not in_responded else "⬅️ رجوع")
 
             if submitted_save:
                 safe_update(sheet, f"B{i}", [[new_type]])
@@ -221,26 +224,20 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
                 safe_update(sheet, f"D{i}", [[new_action]])
                 safe_update(sheet, f"G{i}", [[new_outbound]])
                 safe_update(sheet, f"H{i}", [[new_inbound]])
-                st.success("✅ تم التعديل")
 
             if submitted_delete:
                 safe_delete(sheet, i)
-                st.warning("🗑️ تم حذف الشكوى")
 
             if submitted_archive:
                 safe_append(archive_sheet, [comp_id, new_type, new_notes, new_action, date_added, restored, new_outbound, new_inbound])
                 safe_delete(sheet, i)
-                st.success("♻️ الشكوى انتقلت للأرشيف")
 
             if submitted_move:
                 if not in_responded:
                     safe_append(responded_sheet, [comp_id, new_type, new_notes, new_action, date_added, restored, new_outbound, new_inbound])
-                    safe_delete(sheet, i)
-                    st.success("✅ انتقلت للإجراءات المردودة")
                 else:
                     safe_append(complaints_sheet, [comp_id, new_type, new_notes, new_action, date_added, restored, new_outbound, new_inbound])
-                    safe_delete(sheet, i)
-                    st.success("✅ انتقلت للنشطة")
+                safe_delete(sheet, i)
 
 # ====== البحث عن شكوى ======
 st.header("🔍 البحث عن شكوى")
@@ -248,7 +245,7 @@ search_id = st.text_input("أدخل رقم الشكوى للبحث")
 if search_id.strip():
     found = False
     for sheet, in_responded, in_archive in [(complaints_sheet, False, False), (responded_sheet, True, False), (archive_sheet, False, True)]:
-        data = sheet.get_all_values()
+        data = get_sheet_data(sheet)
         for i, row in enumerate(data[1:], start=2):
             if str(row[0]) == search_id:
                 st.success(f"✅ الشكوى موجودة في {'المردودة' if in_responded else 'الأرشيف' if in_archive else 'النشطة'}")
@@ -291,7 +288,7 @@ with st.form("add_complaint", clear_on_submit=True):
                         restored_inbound = row[7] if len(row) > 7 else ""
                         if safe_append(complaints_sheet, [comp_id, restored_type, restored_notes, restored_action, date_now, "🔄 مسترجعة", restored_outbound, restored_inbound]):
                             safe_delete(archive_sheet, idx)
-                            st.success("✅ الشكوى كانت في الأرشيف وتمت إعادتها للنشطة")
+                            st.success("✅ الشكوى تمت إعادتها للنشطة")
                         break
             else:
                 if action.strip():
@@ -303,7 +300,7 @@ with st.form("add_complaint", clear_on_submit=True):
 
 # ====== عرض الشكاوى النشطة ======
 st.header("📋 الشكاوى النشطة:")
-active_notes = complaints_sheet.get_all_values()
+active_notes = get_sheet_data(complaints_sheet)
 if len(active_notes) > 1:
     for i, row in enumerate(active_notes[1:], start=2):
         render_complaint(complaints_sheet, i, row)
@@ -312,7 +309,7 @@ else:
 
 # ====== عرض الإجراءات المردودة ======
 st.header("✅ الإجراءات المردودة حسب النوع:")
-responded_notes = responded_sheet.get_all_values()
+responded_notes = get_sheet_data(responded_sheet)
 if len(responded_notes) > 1:
     types_in_responded = list({row[1] for row in responded_notes[1:]})
     for complaint_type in types_in_responded:
@@ -329,6 +326,7 @@ if len(responded_notes) > 1:
                 inbound_awb = row[7] if len(row) > 7 else ""
                 rw_record = get_returnwarehouse_record(comp_id)
 
+                # تحقق من حالة Delivered
                 delivered = False
                 for awb in [outbound_awb, inbound_awb]:
                     if awb and "Delivered" in get_aramex_status(awb):
@@ -361,15 +359,17 @@ else:
 
 # ====== عرض الأرشيف ======
 st.header("📦 الأرشيف:")
-archived = archive_sheet.get_all_values()
+archived = get_sheet_data(archive_sheet)
 if len(archived) > 1:
     if "archive_show_count" not in st.session_state:
         st.session_state["archive_show_count"] = 50
     show_count = st.session_state["archive_show_count"]
-    for i, row in enumerate(archived[1:show_count], start=2):
+
+    for i, row in enumerate(archived[1:show_count+1], start=2):
         render_complaint(archive_sheet, i, row, in_archive=True)
-    if len(archived) - 1 > show_count:
-        if st.button("عرض المزيد من الأرشيف"):
+
+    if show_count < len(archived) - 1:
+        if st.button("المزيد..."):
             st.session_state["archive_show_count"] += 50
             st.experimental_rerun()
 else:
@@ -377,7 +377,7 @@ else:
 
 # ====== عرض معلق أرامكس ======
 st.header("📦 معلق أرامكس:")
-aramex_pending = aramex_sheet.get_all_values()
+aramex_pending = get_sheet_data(aramex_sheet)
 if len(aramex_pending) > 1:
     for i, row in enumerate(aramex_pending[1:], start=2):
         render_complaint(aramex_sheet, i, row)
@@ -386,7 +386,7 @@ else:
 
 # ====== عرض أرشيف أرامكس ======
 st.header("📦 أرشيف أرامكس:")
-aramex_archived = aramex_archive.get_all_values()
+aramex_archived = get_sheet_data(aramex_archive)
 if len(aramex_archived) > 1:
     for i, row in enumerate(aramex_archived[1:], start=2):
         render_complaint(aramex_archive, i, row, in_archive=True)
