@@ -162,78 +162,85 @@ def get_aramex_status(awb_number, search_type="Waybill"):
     except Exception as e:
         return f"خطأ في جلب الحالة: {e}"
 
-# ====== إدارة التعديلات محليًا ======
-if "local_changes" not in st.session_state:
-    st.session_state["local_changes"] = {}
-
-def record_local_change(sheet_title, row_index, field_name, value):
-    key = (sheet_title, row_index)
-    if key not in st.session_state["local_changes"]:
-        st.session_state["local_changes"][key] = {}
-    st.session_state["local_changes"][key][field_name] = value
-
-# ====== دالة عرض الشكوى مع التخزين المحلي ======
+# ====== دالة عرض الشكوى ======
 def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
+    # ✅ إصلاح مشكلة الصفوف الناقصة (مثل معلق أرامكس)
     while len(row) < 8:
         row.append("")
+
     comp_id, comp_type, notes, action, date_added = row[:5]
     restored = row[5]
     outbound_awb = row[6]
     inbound_awb = row[7]
+
     order_status = get_order_status(comp_id)
 
     with st.expander(f"🆔 {comp_id} | 📌 {comp_type} | 📅 {date_added} {restored} | {order_status}"):
-        st.write(f"📌 النوع الحالي: {comp_type}")
-        st.write(f"📝 الملاحظات: {notes}")
-        st.write(f"✅ الإجراء: {action}")
-        st.caption(f"📅 تاريخ التسجيل: {date_added}")
+        with st.form(key=f"form_{comp_id}_{sheet.title}"):
+            st.write(f"📌 النوع الحالي: {comp_type}")
+            st.write(f"📝 الملاحظات: {notes}")
+            st.write(f"✅ الإجراء: {action}")
+            st.caption(f"📅 تاريخ التسجيل: {date_added}")
 
-        rw_record = get_returnwarehouse_record(comp_id)
-        if rw_record:
-            st.info(
-                f"📦 سجل من ReturnWarehouse:\n"
-                f"رقم الطلب: {rw_record['رقم الطلب']}\n"
-                f"الفاتورة: {rw_record['الفاتورة']}\n"
-                f"التاريخ: {rw_record['التاريخ']}\n"
-                f"الزبون: {rw_record['الزبون']}\n"
-                f"المبلغ: {rw_record['المبلغ']}\n"
-                f"رقم الشحنة: {rw_record['رقم الشحنة']}\n"
-                f"البيان: {rw_record['البيان']}"
-            )
+            rw_record = get_returnwarehouse_record(comp_id)
+            if rw_record:
+                st.info(
+                    f"📦 سجل من ReturnWarehouse:\n"
+                    f"رقم الطلب: {rw_record['رقم الطلب']}\n"
+                    f"الفاتورة: {rw_record['الفاتورة']}\n"
+                    f"التاريخ: {rw_record['التاريخ']}\n"
+                    f"الزبون: {rw_record['الزبون']}\n"
+                    f"المبلغ: {rw_record['المبلغ']}\n"
+                    f"رقم الشحنة: {rw_record['رقم الشحنة']}\n"
+                    f"البيان: {rw_record['البيان']}"
+                )
 
-        new_type = st.selectbox(f"✏️ عدل نوع الشكوى {comp_id}", [comp_type] + [t for t in types_list if t != comp_type], index=0, key=f"type_{comp_id}")
-        new_notes = st.text_area(f"✏️ عدل الملاحظات {comp_id}", value=notes, key=f"notes_{comp_id}")
-        new_action = st.text_area(f"✏️ عدل الإجراء {comp_id}", value=action, key=f"action_{comp_id}")
-        new_outbound = st.text_input(f"✏️ Outbound AWB {comp_id}", value=outbound_awb, key=f"out_{comp_id}")
-        new_inbound = st.text_input(f"✏️ Inbound AWB {comp_id}", value=inbound_awb, key=f"in_{comp_id}")
+            new_type = st.selectbox("✏️ عدل نوع الشكوى", [comp_type] + [t for t in types_list if t != comp_type], index=0)
+            new_notes = st.text_area("✏️ عدل الملاحظات", value=notes)
+            new_action = st.text_area("✏️ عدل الإجراء", value=action)
+            new_outbound = st.text_input("✏️ Outbound AWB", value=outbound_awb)
+            new_inbound = st.text_input("✏️ Inbound AWB", value=inbound_awb)
 
-        record_local_change(sheet.title, i, "type", new_type)
-        record_local_change(sheet.title, i, "notes", new_notes)
-        record_local_change(sheet.title, i, "action", new_action)
-        record_local_change(sheet.title, i, "outbound", new_outbound)
-        record_local_change(sheet.title, i, "inbound", new_inbound)
+            if new_outbound:
+                st.info(f"🚚 Outbound AWB: {new_outbound} | الحالة: {get_aramex_status(new_outbound)}")
+            if new_inbound:
+                st.info(f"📦 Inbound AWB: {new_inbound} | الحالة: {get_aramex_status(new_inbound)}")
 
-        if new_outbound:
-            st.info(f"🚚 Outbound AWB: {new_outbound} | الحالة: {get_aramex_status(new_outbound)}")
-        if new_inbound:
-            st.info(f"📦 Inbound AWB: {new_inbound} | الحالة: {get_aramex_status(new_inbound)}")
+            col1, col2, col3, col4 = st.columns(4)
+            submitted_save = col1.form_submit_button("💾 حفظ")
+            submitted_delete = col2.form_submit_button("🗑️ حذف")
+            submitted_archive = col3.form_submit_button("📦 أرشفة")
+            if not in_responded:
+                submitted_move = col4.form_submit_button("➡️ نقل للإجراءات المردودة")
+            else:
+                submitted_move = col4.form_submit_button("⬅️ رجوع للنشطة")
 
-# ====== زر تطبيق كل التعديلات ======
-if st.button("💾 تطبيق كل التعديلات"):
-    for (sheet_title, row_index), changes in st.session_state["local_changes"].items():
-        sheet = sheets_dict[sheet_title]
-        if "type" in changes:
-            safe_update(sheet, f"B{row_index}", [[changes["type"]]])
-        if "notes" in changes:
-            safe_update(sheet, f"C{row_index}", [[changes["notes"]]])
-        if "action" in changes:
-            safe_update(sheet, f"D{row_index}", [[changes["action"]]])
-        if "outbound" in changes:
-            safe_update(sheet, f"G{row_index}", [[changes["outbound"]]])
-        if "inbound" in changes:
-            safe_update(sheet, f"H{row_index}", [[changes["inbound"]]])
-    st.success("✅ تم تطبيق جميع التعديلات دفعة واحدة")
-    st.session_state["local_changes"] = {}
+            if submitted_save:
+                safe_update(sheet, f"B{i}", [[new_type]])
+                safe_update(sheet, f"C{i}", [[new_notes]])
+                safe_update(sheet, f"D{i}", [[new_action]])
+                safe_update(sheet, f"G{i}", [[new_outbound]])
+                safe_update(sheet, f"H{i}", [[new_inbound]])
+                st.success("✅ تم التعديل")
+
+            if submitted_delete:
+                safe_delete(sheet, i)
+                st.warning("🗑️ تم حذف الشكوى")
+
+            if submitted_archive:
+                safe_append(archive_sheet, [comp_id, new_type, new_notes, new_action, date_added, restored, new_outbound, new_inbound])
+                safe_delete(sheet, i)
+                st.success("♻️ الشكوى انتقلت للأرشيف")
+
+            if submitted_move:
+                if not in_responded:
+                    safe_append(responded_sheet, [comp_id, new_type, new_notes, new_action, date_added, restored, new_outbound, new_inbound])
+                    safe_delete(sheet, i)
+                    st.success("✅ انتقلت للإجراءات المردودة")
+                else:
+                    safe_append(complaints_sheet, [comp_id, new_type, new_notes, new_action, date_added, restored, new_outbound, new_inbound])
+                    safe_delete(sheet, i)
+                    st.success("✅ انتقلت للنشطة")
 
 # ====== البحث عن شكوى ======
 st.header("🔍 البحث عن شكوى")
