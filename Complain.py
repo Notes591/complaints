@@ -22,9 +22,11 @@ client = gspread.authorize(creds)
 
 # ====== أوراق جوجل شيت ======
 SHEET_NAME = "Complaints"
+# أضفنا ورقة PendingApproval هنا لتخزين الشكاوى المرسلة لانتظار الاعتماد
 sheet_titles = [
     "Complaints", "Responded", "Archive", "Types",
-    "معلق ارامكس", "أرشيف أرامكس", "ReturnWarehouse", "Order Number"
+    "معلق ارامكس", "أرشيف أرامكس", "ReturnWarehouse", "Order Number",
+    "PendingApproval"  # ورقة جديدة لانتظار الاعتماد
 ]
 
 sheets_dict = {}
@@ -48,10 +50,107 @@ aramex_sheet = sheets_dict["معلق ارامكس"]
 aramex_archive = sheets_dict["أرشيف أرامكس"]
 return_warehouse_sheet = sheets_dict["ReturnWarehouse"]
 order_number_sheet = sheets_dict["Order Number"]
+# الورقة الجديدة لانتظار الاعتماد
+pending_approval_sheet = sheets_dict.get("PendingApproval")
 
-# ====== إعدادات الصفحة ======
+# ====== إعداد الصفحة ======
 st.set_page_config(page_title="📢 نظام الشكاوى", page_icon="⚠️", layout="wide")
 st.title("⚠️ نظام إدارة الشكاوى")
+
+# ====== قسم المدير: إدارة كلمة المرور واعتماد الشكاوى (قسم منفصل) ======
+# هذه الواجهة تم إضافتها لتسمح للمدير بتسجيل الدخول، رؤية الشكاوى المعلقة، وتغيير كلمة المرور
+st.markdown("---")
+st.header("🔐 قسم المدير - اعتماد الشكاوى (خاص)")
+
+# كلمة مرور المدير مخزنة في st.secrets تحت المفتاح admin_pass إن وُجد، وإلا نستخدم القيمة الافتراضية
+DEFAULT_ADMIN_PASS = st.secrets.get("admin_pass", "Admin123")
+
+# جلسة لتخزين حالة تسجيل دخول المدير داخل الجلسة الحالية
+if "admin_logged_in" not in st.session_state:
+    st.session_state["admin_logged_in"] = False
+
+col_a, col_b = st.columns([2, 1])
+with col_a:
+    if not st.session_state["admin_logged_in"]:
+        admin_pass_input = st.text_input("🔑 أدخل كلمة مرور المدير لتسجيل الدخول:", type="password", key="admin_login_input")
+        if st.button("تسجيل دخول كمدير"):
+            current_pass = st.secrets.get("admin_pass", DEFAULT_ADMIN_PASS)
+            if admin_pass_input == current_pass:
+                st.session_state["admin_logged_in"] = True
+                st.success("✅ تم تسجيل الدخول كمدير")
+            else:
+                st.error("❌ كلمة المرور غير صحيحة")
+    else:
+        st.success("✅ المدير مسجل دخول")
+        if st.button("تسجيل خروج (الخروج من وضع المدير)"):
+            st.session_state["admin_logged_in"] = False
+            st.experimental_rerun()
+
+with col_b:
+    # واجهة تغيير كلمة المرور: يحتاج إدخال الباسورد الحالي ثم الجديد
+    st.write("**تغيير كلمة مرور المدير**")
+    cur = st.text_input("🔒 كلمة المرور الحالية:", type="password", key="admin_cur_pass")
+    newp = st.text_input("🔐 كلمة المرور الجديدة:", type="password", key="admin_new_pass")
+    newp2 = st.text_input("🔐 تأكيد كلمة المرور الجديدة:", type="password", key="admin_new_pass2")
+    if st.button("تغيير كلمة المرور"):
+        stored = st.secrets.get("admin_pass", DEFAULT_ADMIN_PASS)
+        if cur != stored:
+            st.error("❌ كلمة المرور الحالية غير صحيحة. لا يمكن تغييرها.")
+        else:
+            if not newp or newp != newp2:
+                st.error("⚠️ تأكد من إدخال كلمة المرور الجديدة ومطابقتها في الحقلين.")
+            else:
+                # ملاحظة: st.secrets لا يمكن تعديله من التطبيق، لذا نعرض تعليمات لحفظها يدويا
+                st.info("🔔 لتنفيذ التغيير بشكل دائم: اضبط القيمة 'admin_pass' في إعدادات secrets لتطبيق Streamlit (ستحتاج لتحديث التطبيق).")
+                st.success("✅ كلمة المرور الجديدة جاهزة - (تأكد من حفظها في st.secrets لاحقًا)")
+
+# إذا المدير مسجل دخول، نعرض جدول الانتظار لاعتماد الشكاوى
+if st.session_state.get("admin_logged_in"):
+    st.markdown("---")
+    st.subheader("📋 الشكاوى في انتظار الاعتماد")
+    try:
+        pending_data = pending_approval_sheet.get_all_values()
+    except Exception:
+        pending_data = []
+    if len(pending_data) > 1:
+        for idx, prow in enumerate(pending_data[1:], start=2):
+            while len(prow) < 10:
+                prow.append("")
+            comp_id = prow[0]
+            comp_type = prow[1]
+            notes = prow[2]
+            action = prow[3]
+            date_added = prow[4]
+            restored = prow[5]
+            outbound_awb = prow[6]
+            inbound_awb = prow[7]
+            source_sheet = prow[8] if len(prow) > 8 else "Complaints"
+
+            with st.expander(f"📌 {comp_id} | {comp_type} | من: {source_sheet}"):
+                st.write(f"📝 الملاحظات: {notes}")
+                st.write(f"✅ الإجراء: {action}")
+                st.caption(f"📅 تم إرسالها لانتظار الاعتماد بتاريخ: {date_added}")
+                signer = st.text_input(f"✍️ توقيع المدير (إلكتروني) - {comp_id}", key=f"sign_{comp_id}")
+                col1, col2 = st.columns(2)
+                if col1.button(f"✅ تم الاعتماد - {comp_id}", key=f"approve_{comp_id}"):
+                    if not signer.strip():
+                        st.warning("⚠️ أضف توقيع المدير قبل الضغط على تم الاعتماد.")
+                    else:
+                        approval_note = f"{action}\n\n✅ تم الاعتماد بواسطة: {signer} بتاريخ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                        row_to_return = [comp_id, comp_type, notes, approval_note, date_added, "✅ معتمدة", outbound_awb, inbound_awb]
+                        target_sheet = complaints_sheet if source_sheet == "Complaints" else responded_sheet
+                        if safe_append(target_sheet, row_to_return):
+                            if safe_delete(pending_approval_sheet, idx):
+                                st.success(f"✅ تم اعتماد الشكوى {comp_id} وإعادتها إلى {source_sheet}")
+                if col2.button(f"❌ رفض وإرجاع للنشاط - {comp_id}", key=f"reject_{comp_id}"):
+                    # نعيد الشكوى إلى الورقة المصدر بدون علامة اعتماد، ونحذف من الانتظار
+                    row_to_return = [comp_id, comp_type, notes, action, date_added, restored, outbound_awb, inbound_awb]
+                    target_sheet = complaints_sheet if source_sheet == "Complaints" else responded_sheet
+                    if safe_append(target_sheet, row_to_return):
+                        if safe_delete(pending_approval_sheet, idx):
+                            st.info(f"ℹ️ تم رفض الشكوى {comp_id} وإعادتها إلى {source_sheet}")
+    else:
+        st.info("لا توجد شكاوى في انتظار الاعتماد حالياً.")
 
 # ====== دوال Retry (احتفظنا بها كما طلبت) ======
 def safe_append(sheet, row_data, retries=5, delay=1):
@@ -253,6 +352,9 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
             else:
                 submitted_move = col4.form_submit_button("⬅️ رجوع للنشطة")
 
+            # زر جديد: إرسال لانتظار الاعتماد (ينقل الشكوى لورقة PendingApproval مع حفظ مصدرها)
+            submitted_pending = col4.form_submit_button("⏳ انتظار الاعتماد")
+
             if submitted_save:
                 safe_update(sheet, f"B{i}", [[new_type]])
                 safe_update(sheet, f"C{i}", [[new_notes]])
@@ -279,6 +381,14 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
                     if safe_append(complaints_sheet, [comp_id, new_type, new_notes, new_action, date_added, restored, new_outbound, new_inbound]):
                         if safe_delete(sheet, i):
                             st.success("✅ انتقلت للنشطة")
+
+            if submitted_pending:
+                # نص محفوظ يوضح من أين أرسلت الشكوى
+                original_sheet = "Responded" if in_responded else "Complaints"
+                pending_row = [comp_id, new_type, new_notes, new_action, date_added, restored, new_outbound, new_inbound, original_sheet, datetime.now().strftime("%Y-%m-%d %H:%M:%S")]
+                if safe_append(pending_approval_sheet, pending_row):
+                    if safe_delete(sheet, i):
+                        st.info("⏳ تم إرسال الشكوى لانتظار الاعتماد")
 
 # ====== البحث عن شكوى ======
 st.header("🔍 البحث عن شكوى")
