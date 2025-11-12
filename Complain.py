@@ -10,6 +10,13 @@ import xml.etree.ElementTree as ET
 import re
 from streamlit_autorefresh import st_autorefresh
 
+# مكتبات جديدة للتوقيع الإلكتروني بالرسم
+from streamlit_drawable_canvas import st_canvas
+import numpy as np
+from PIL import Image
+import io
+import base64
+
 # ====== تحديث تلقائي (قابلة للتعديل) ======
 # القيمة بالمللي ثانية - الافتراضي 20 دقيقة (1200000). لو تريد 60 ثانية ضع 60000.
 st_autorefresh(interval=1200000, key="auto_refresh")
@@ -318,15 +325,49 @@ if st.session_state.get("admin_logged_in"):
                         st.caption(f"📅 تم إرسالها لانتظار الاعتماد بتاريخ: {sent_time}")
                     else:
                         st.caption(f"📅 مصدر الإرسال: {source_sheet}")
-                    signer = st.text_input(f"✍️ توقيع المدير (إلكتروني) - {comp_id}", key=f"sign_{comp_id}")
+
+                    # ==== هنا إضافة واجهة التوقيع الإلكتروني بالرسم + حقل نصي احتياطي ====
+                    st.write("✍️ رسم التوقيع أدناه (يمكن الرسم بالماوس أو اللمس):")
+                    canvas_result = st_canvas(
+                        fill_color="rgba(0,0,0,0)",  # شفاف
+                        stroke_width=2,
+                        stroke_color="#000000",
+                        background_color="#fff",
+                        height=150,
+                        width=400,
+                        drawing_mode="freedraw",
+                        key=f"canvas_{comp_id}"
+                    )
+
+                    signer_text = st.text_input(f"أو اكتب توقيع المدير (خيار احتياطي) - {comp_id}", key=f"sign_text_{comp_id}")
+
+                    # تحويل الرسم إلى Base64 ليتم تخزينه في الشيت (إن وُجد)
+                    signer_image_str = ""
+                    if canvas_result.image_data is not None:
+                        try:
+                            img = Image.fromarray(np.uint8(canvas_result.image_data))
+                            buffered = io.BytesIO()
+                            img.save(buffered, format="PNG")
+                            signer_image_str = base64.b64encode(buffered.getvalue()).decode()
+                            # عرض الصورة المصغرة للتأكيد
+                            st.image(img, caption="معاينة التوقيع المرسوم", width=200)
+                        except Exception as e:
+                            st.error(f"خطأ في معالجة صورة التوقيع: {e}")
+
                     col1, col2 = st.columns(2)
                     # عندما يضغط المدير "تم الاعتماد" نعيد السجل إلى الورقة المصدر مع توقيع وتاريخ الاعتماد
                     if col1.button(f"✅ تم الاعتماد - {comp_id}", key=f"approve_{comp_id}"):
-                        if not signer.strip():
-                            st.warning("⚠️ أضف توقيع المدير قبل الضغط على تم الاعتماد.")
+                        # نتحقق من وجود توقيع إما نصي أو رسمة
+                        if not signer_text.strip() and not signer_image_str:
+                            st.warning("⚠️ أضف توقيع المدير (مرسومًا أو نصيًا) قبل الضغط على تم الاعتماد.")
                         else:
-                            approval_note = f"{action}\n\n✅ تم الاعتماد بواسطة: {signer} بتاريخ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-                            row_to_return = [comp_id, comp_type, notes, approval_note, date_added, "✅ معتمدة", outbound_awb, inbound_awb]
+                            approval_note = f"{action}\n\n✅ تم الاعتماد بتاريخ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                            if signer_text.strip():
+                                approval_note += f" | اعتمد بواسطة: {signer_text}"
+                            if signer_image_str:
+                                approval_note += " | توقيع المدير محفوظ كصورة Base64"
+                            # نضمّن توقيع Base64 كحقل إضافي في السطر (قد تراه في العمود الأخير)
+                            row_to_return = [comp_id, comp_type, notes, approval_note, date_added, "✅ معتمدة", outbound_awb, inbound_awb, signer_image_str]
                             target_sheet = complaints_sheet if source_sheet == "Complaints" else responded_sheet
                             # append إلى الورقة الهدف ثم إزالة من pending (نبحث عن السطر المطابق ونحذفه)
                             appended = safe_append(target_sheet, row_to_return)
