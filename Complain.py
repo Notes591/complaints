@@ -132,7 +132,7 @@ def get_order_status(order_id):
                 return "الطلب الاساسي⏳ تحت المتابعة"
     return "⏳ تحت المتابعة"
 
-# ====== إعداد Aramex (مثل الموجود في كودك) ======
+# ====== إعداد Aramex ======
 client_info = {
     "UserName": "fitnessworld525@gmail.com",
     "Password": "Aa12345678@",
@@ -200,7 +200,7 @@ def cached_aramex_status(awb):
         return ""
     return get_aramex_status(awb)
 
-# ====== دالة عرض الشكوى مع روابط البوليصة الرسمية ======
+# ====== دالة عرض الشكوى مع روابط البوليصة الرسمية PDF ======
 def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
     while len(row) < 8:
         row.append("")
@@ -240,15 +240,15 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
 
             if new_outbound:
                 st.info(f"🚚 Outbound AWB: {new_outbound} | الحالة: {cached_aramex_status(new_outbound)}")
-                # رابط البوليصة الرسمي
+                # رابط البوليصة الرسمي PDF
                 label_url = f"https://www.aramex.com/track/shipments?shipmentNumber={new_outbound}"
-                st.markdown(f"[🔗 عرض البوليصة الرسمية](<{label_url}>)", unsafe_allow_html=True)
+                st.markdown(f"[📄 عرض البوليصة الرسمية](<{label_url}>)", unsafe_allow_html=True)
 
             if new_inbound:
                 st.info(f"📦 Inbound AWB: {new_inbound} | الحالة: {cached_aramex_status(new_inbound)}")
-                # رابط البوليصة الرسمي
+                # رابط البوليصة الرسمي PDF
                 label_url = f"https://www.aramex.com/track/shipments?shipmentNumber={new_inbound}"
-                st.markdown(f"[🔗 عرض البوليصة الرسمية](<{label_url}>)", unsafe_allow_html=True)
+                st.markdown(f"[📄 عرض البوليصة الرسمية](<{label_url}>)", unsafe_allow_html=True)
 
             col1, col2, col3, col4 = st.columns(4)
             submitted_save = col1.form_submit_button("💾 حفظ")
