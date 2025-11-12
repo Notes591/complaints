@@ -102,15 +102,27 @@ def safe_delete(sheet, row_index, retries=5, delay=1):
     return False
 
 # ====== تحميل الأنواع ومصادر البيانات ======
-try:
-    types_list = [row[0] for row in types_sheet.get_all_values()[1:]]
-except Exception:
-    types_list = []
 
-try:
-    return_warehouse_data = return_warehouse_sheet.get_all_values()[1:]
-except Exception:
-    return_warehouse_data = []
+@st.cache_data(ttl=60)
+def get_types_list():
+    try:
+        return [row[0] for row in types_sheet.get_all_values()[1:]]
+    except Exception:
+        return []
+
+types_list = get_types_list()
+
+
+
+@st.cache_data(ttl=60)
+def get_return_warehouse_data():
+    try:
+        return return_warehouse_sheet.get_all_values()[1:]
+    except Exception:
+        return []
+
+return_warehouse_data = get_return_warehouse_data()
+
 
 def get_returnwarehouse_record(order_id):
     for row in return_warehouse_data:
@@ -126,10 +138,16 @@ def get_returnwarehouse_record(order_id):
             }
     return None
 
-try:
-    order_number_data = order_number_sheet.get_all_values()[1:]
-except Exception:
-    order_number_data = []
+
+@st.cache_data(ttl=60)
+def get_order_number_data():
+    try:
+        return order_number_sheet.get_all_values()[1:]
+    except Exception:
+        return []
+
+order_number_data = get_order_number_data()
+
 
 def get_order_status(order_id):
     for row in order_number_data:
