@@ -250,12 +250,8 @@ with col_a:
     if not st.session_state["admin_logged_in"]:
         admin_pass_input = st.text_input("🔑 أدخل كلمة مرور المدير لتسجيل الدخول:", type="password", key="admin_login_input")
         if st.button("تسجيل دخول كمدير"):
-        current_pass = st.secrets.get("admin_pass", DEFAULT_ADMIN_PASS")
-        if admin_pass_input == current_pass:
-            if not st.session_state.get('admin_logged_in', False):
-                st.session_state['admin_logged_in'] = True
-                st.success('✅ تم تسجيل الدخول كمدير')
-                st.experimental_rerun()
+            current_pass = st.secrets.get("admin_pass", DEFAULT_ADMIN_PASS)
+            if admin_pass_input == current_pass:
                 st.session_state["admin_logged_in"] = True
                 st.success("✅ تم تسجيل الدخول كمدير")
             else:
