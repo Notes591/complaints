@@ -38,7 +38,6 @@ sheet_titles = [
 
 sheets_dict = {}
 for title in sheet_titles:
-    time.sleep(1)  # تأخير لتفادي API quota
     try:
         sheets_dict[title] = client.open(SHEET_NAME).worksheet(title)
     except Exception as e:
@@ -251,8 +250,12 @@ with col_a:
     if not st.session_state["admin_logged_in"]:
         admin_pass_input = st.text_input("🔑 أدخل كلمة مرور المدير لتسجيل الدخول:", type="password", key="admin_login_input")
         if st.button("تسجيل دخول كمدير"):
-            current_pass = st.secrets.get("admin_pass", DEFAULT_ADMIN_PASS)
-            if admin_pass_input == current_pass:
+        current_pass = st.secrets.get("admin_pass", DEFAULT_ADMIN_PASS")
+        if admin_pass_input == current_pass:
+            if not st.session_state.get('admin_logged_in', False):
+                st.session_state['admin_logged_in'] = True
+                st.success('✅ تم تسجيل الدخول كمدير')
+                st.experimental_rerun()
                 st.session_state["admin_logged_in"] = True
                 st.success("✅ تم تسجيل الدخول كمدير")
             else:
@@ -262,7 +265,6 @@ with col_a:
         if st.button("تسجيل خروج (الخروج من وضع المدير)"):
             st.session_state["admin_logged_in"] = False
             st.experimental_rerun()
-    st.stop()  # منع التحديث المتكرر بعد تسجيل الخروج أو الدخول
 
 with col_b:
     # زر لإظهار/إخفاء إعدادات المدير (حقل تغيير كلمة المرور) — يظهر فقط بعد تسجيل الدخول
