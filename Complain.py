@@ -241,8 +241,19 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
 
             if new_outbound:
                 st.info(f"🚚 Outbound AWB: {new_outbound} | الحالة: {cached_aramex_status(new_outbound)}")
+                try:
+                    label_url = f"https://ws.aramex.net/ShippingAPI.V2/rpt_cache/{new_outbound}.pdf"
+                    st.markdown(f"[📄 عرض بوليصة Outbound]( {label_url} )", unsafe_allow_html=True)
+                except Exception:
+                    st.warning("⚠️ لم يتم توليد رابط بوليصة Outbound")
+
             if new_inbound:
                 st.info(f"📦 Inbound AWB: {new_inbound} | الحالة: {cached_aramex_status(new_inbound)}")
+                try:
+                    label_url = f"https://ws.aramex.net/ShippingAPI.V2/rpt_cache/{new_inbound}.pdf"
+                    st.markdown(f"[📄 عرض بوليصة Inbound]( {label_url} )", unsafe_allow_html=True)
+                except Exception:
+                    st.warning("⚠️ لم يتم توليد رابط بوليصة Inbound")
 
             col1, col2, col3, col4 = st.columns(4)
             submitted_save = col1.form_submit_button("💾 حفظ")
