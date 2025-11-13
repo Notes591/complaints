@@ -200,6 +200,66 @@ def cached_aramex_status(awb):
         return ""
     return get_aramex_status(awb)
 
+# ====== دالة لجلب رابط البوليصة من Aramex PrintLabel (Sandbox) ======
+def get_aramex_label_url(awb_number, sandbox=True):
+    """
+    يستدعي PrintLabel في Aramex ويعيد LabelURL إن وجد.
+    sandbox=True -> يستخدم بيئة التطوير (https://ws.dev.aramex.net/...)
+    """
+    try:
+        base_url = "https://ws.dev.aramex.net/ShippingAPI.V2/Shipping/Service_1_0.svc/json" if sandbox \
+            else "https://ws.aramex.net/ShippingAPI.V2/Shipping/Service_1_0.svc/json"
+
+        payload = {
+            "ClientInfo": client_info,
+            "LabelInfo": {
+                # ReportID يمكن تغييره إذا لديك قيمة خاصة. 9729 شائعة للطباعة بصيغة PDF A4.
+                "ReportID": 9729,
+                "ReportType": "URL"
+            },
+            "ShipmentNumber": [awb_number]
+        }
+
+        response = requests.post(
+            f"{base_url}/PrintLabel",
+            json=payload,
+            headers={"Content-Type": "application/json"},
+            timeout=20
+        )
+
+        if response.status_code != 200:
+            return f"❌ فشل اتصال PrintLabel - كود {response.status_code}"
+
+        data = response.json()
+        # هيكل الاستجابة قد يختلف؛ نتعامل بشكل متحفظ
+        if isinstance(data, dict):
+            if data.get("HasErrors"):
+                # حاول إظهار رسالة الخطأ إن وجدت
+                try:
+                    errors = data.get("Notifications") or data.get("Errors") or []
+                    if errors:
+                        return f"⚠️ خطأ من Aramex: {errors}"
+                except Exception:
+                    pass
+                return "⚠️ خطأ من Aramex أثناء توليد البوليصة"
+
+            shipments = data.get("Shipments", [])
+            if shipments and isinstance(shipments, list):
+                first = shipments[0]
+                # بعض الاستجابات تضع LabelURL مباشرة أو داخل حقول أخرى
+                label_url = first.get("LabelURL") or first.get("LabelUrl") or first.get("URL")
+                if label_url and isinstance(label_url, str) and label_url.startswith("http"):
+                    return label_url
+
+            # بعض البنى ترجع ReportURL في مكان آخر
+            report_url = data.get("LabelURL") or data.get("ReportURL") or data.get("LabelUrl")
+            if report_url and isinstance(report_url, str) and report_url.startswith("http"):
+                return report_url
+
+        return "⚠️ لم يتم العثور على رابط بوليصة في استجابة Aramex"
+    except Exception as e:
+        return f"⚠️ خطأ أثناء طلب البوليصة: {e}"
+
 # ====== دالة عرض الشكوى (كما في كودك) مع بعض تحسينات session_state لتسريع التفاعل ======
 def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
     # نتأكد من طول الصف
@@ -239,21 +299,33 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
             new_outbound = st.text_input("✏️ Outbound AWB", value=outbound_awb)
             new_inbound = st.text_input("✏️ Inbound AWB", value=inbound_awb)
 
+            # ===== عرض حالة Aramex وزر استدعاء PrintLabel (Sandbox) للـ Outbound =====
             if new_outbound:
                 st.info(f"🚚 Outbound AWB: {new_outbound} | الحالة: {cached_aramex_status(new_outbound)}")
                 try:
-                    label_url = f"https://ws.aramex.net/ShippingAPI.V2/rpt_cache/{new_outbound}.pdf"
-                    st.markdown(f"[📄 عرض بوليصة Outbound]( {label_url} )", unsafe_allow_html=True)
+                    # زر للحصول على رابط البوليصة الحقيقية من Aramex (بيئة التطوير كما طلبت)
+                    if st.button(f"📄 عرض بوليصة Outbound {new_outbound}", key=f"btn_out_{sheet.title}_{i}_{new_outbound}"):
+                        label_url = get_aramex_label_url(new_outbound, sandbox=True)
+                        if isinstance(label_url, str) and label_url.startswith("http"):
+                            # نعرض الرابط كنص قابل للنقر
+                            st.markdown(f"[📄 فتح بوليصة Outbound]({label_url})", unsafe_allow_html=True)
+                        else:
+                            st.warning(label_url)
                 except Exception:
-                    st.warning("⚠️ لم يتم توليد رابط بوليصة Outbound")
+                    st.warning("⚠️ حدث خطأ أثناء توليد رابط بوليصة Outbound")
 
+            # ===== عرض حالة Aramex وزر استدعاء PrintLabel (Sandbox) للـ Inbound =====
             if new_inbound:
                 st.info(f"📦 Inbound AWB: {new_inbound} | الحالة: {cached_aramex_status(new_inbound)}")
                 try:
-                    label_url = f"https://ws.aramex.net/ShippingAPI.V2/rpt_cache/{new_inbound}.pdf"
-                    st.markdown(f"[📄 عرض بوليصة Inbound]( {label_url} )", unsafe_allow_html=True)
+                    if st.button(f"📄 عرض بوليصة Inbound {new_inbound}", key=f"btn_in_{sheet.title}_{i}_{new_inbound}"):
+                        label_url = get_aramex_label_url(new_inbound, sandbox=True)
+                        if isinstance(label_url, str) and label_url.startswith("http"):
+                            st.markdown(f"[📄 فتح بوليصة Inbound]({label_url})", unsafe_allow_html=True)
+                        else:
+                            st.warning(label_url)
                 except Exception:
-                    st.warning("⚠️ لم يتم توليد رابط بوليصة Inbound")
+                    st.warning("⚠️ حدث خطأ أثناء توليد رابط بوليصة Inbound")
 
             col1, col2, col3, col4 = st.columns(4)
             submitted_save = col1.form_submit_button("💾 حفظ")
