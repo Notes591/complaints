@@ -11,8 +11,7 @@ import re
 from streamlit_autorefresh import st_autorefresh
 
 # ====== تحديث تلقائي (قابلة للتعديل) ======
-# القيمة بالمللي ثانية - الافتراضي 20 دقيقة (1200000). لو تريد 60 ثانية ضع 60000.
-st_autorefresh(interval=1200000, key="auto_refresh")
+st_autorefresh(interval=1200000, key="auto_refresh")  # 20 دقيقة
 
 # ====== الاتصال بجوجل شيت ======
 scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
@@ -24,7 +23,7 @@ client = gspread.authorize(creds)
 SHEET_NAME = "Complaints"
 sheet_titles = [
     "Complaints", "Responded", "Archive", "Types",
-    "معلق ارامكس", "أرشيف أرامكس", "ReturnWarehouse", "Order Number"
+    "معلق ارامكس", "أرشيف أرامكس", "ReturnWarehouse", "Order Number", "ManagerSignatures"
 ]
 
 sheets_dict = {}
@@ -32,7 +31,7 @@ for title in sheet_titles:
     try:
         sheets_dict[title] = client.open(SHEET_NAME).worksheet(title)
     except Exception as e:
-        # محاولة إنشاء الورقة لو مش موجودة لتفادي الأخطاء
+        # محاولة إنشاء الورقة لو مش موجودة
         try:
             ss = client.open(SHEET_NAME)
             sheets_dict[title] = ss.add_worksheet(title=title, rows="1000", cols="20")
@@ -48,12 +47,13 @@ aramex_sheet = sheets_dict["معلق ارامكس"]
 aramex_archive = sheets_dict["أرشيف أرامكس"]
 return_warehouse_sheet = sheets_dict["ReturnWarehouse"]
 order_number_sheet = sheets_dict["Order Number"]
+manager_signatures = sheets_dict["ManagerSignatures"]
 
 # ====== إعدادات الصفحة ======
 st.set_page_config(page_title="📢 نظام الشكاوى", page_icon="⚠️", layout="wide")
 st.title("⚠️ نظام إدارة الشكاوى")
 
-# ====== دوال Retry (احتفظنا بها كما طلبت) ======
+# ====== دوال Retry ======
 def safe_append(sheet, row_data, retries=5, delay=1):
     for attempt in range(retries):
         try:
@@ -132,7 +132,7 @@ def get_order_status(order_id):
                 return "الطلب الاساسي⏳ تحت المتابعة"
     return "⏳ تحت المتابعة"
 
-# ====== إعداد Aramex (مثل الموجود في كودك) ======
+# ====== إعداد Aramex ======
 client_info = {
     "UserName": "fitnessworld525@gmail.com",
     "Password": "Aa12345678@",
@@ -193,16 +193,14 @@ def get_aramex_status(awb_number, search_type="Waybill"):
     except Exception as e:
         return f"خطأ في جلب الحالة: {e}"
 
-# ====== Cache لحالات Aramex لتقليل النداءات ======
 @st.cache_data(ttl=300)
 def cached_aramex_status(awb):
     if not awb or str(awb).strip() == "":
         return ""
     return get_aramex_status(awb)
 
-# ====== دالة عرض الشكوى (كما في كودك) مع بعض تحسينات session_state لتسريع التفاعل ======
+# ====== دالة عرض الشكوى مع دعم توقيع المدير ======
 def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
-    # نتأكد من طول الصف
     while len(row) < 8:
         row.append("")
 
@@ -253,6 +251,7 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
             else:
                 submitted_move = col4.form_submit_button("⬅️ رجوع للنشطة")
 
+            # ===== حفظ التعديلات =====
             if submitted_save:
                 safe_update(sheet, f"B{i}", [[new_type]])
                 safe_update(sheet, f"C{i}", [[new_notes]])
@@ -261,15 +260,18 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
                 safe_update(sheet, f"H{i}", [[new_inbound]])
                 st.success("✅ تم التعديل")
 
+            # ===== حذف =====
             if submitted_delete:
                 if safe_delete(sheet, i):
                     st.warning("🗑️ تم حذف الشكوى")
 
+            # ===== أرشفة =====
             if submitted_archive:
                 if safe_append(archive_sheet, [comp_id, new_type, new_notes, new_action, date_added, restored, new_outbound, new_inbound]):
                     if safe_delete(sheet, i):
                         st.success("♻️ الشكوى انتقلت للأرشيف")
 
+            # ===== نقل بين النشطة والمردودة =====
             if submitted_move:
                 if not in_responded:
                     if safe_append(responded_sheet, [comp_id, new_type, new_notes, new_action, date_added, restored, new_outbound, new_inbound]):
@@ -279,6 +281,29 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
                     if safe_append(complaints_sheet, [comp_id, new_type, new_notes, new_action, date_added, restored, new_outbound, new_inbound]):
                         if safe_delete(sheet, i):
                             st.success("✅ انتقلت للنشطة")
+
+            # ===== طلب اعتماد المدير (للمردودة) =====
+            if in_responded:
+                submitted_request_approval = st.form_submit_button("📩 طلب اعتماد المدير")
+                if submitted_request_approval:
+                    existing_signs = manager_signatures.get_all_records()
+                    already_requested = any(str(s.get("ID", "")) == comp_id for s in existing_signs)
+                    if already_requested:
+                        st.warning("⚠️ تم طلب اعتماد هذه الشكوى مسبقاً")
+                    else:
+                        date_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        if safe_append(manager_signatures, [comp_id, "", date_now, "", "معلق"]):
+                            st.success("✅ تم إرسال طلب الاعتماد للمدير")
+
+            # ===== عرض حالة توقيع المدير =====
+            sign_records = manager_signatures.get_all_values()[1:]
+            for rec in sign_records:
+                if rec[0] == comp_id:
+                    manager_name = rec[1]
+                    sign_date = rec[2]
+                    notes = rec[3]
+                    approval_status = rec[4]
+                    st.info(f"🖊️ توقيع المدير: {manager_name or '—'} | 📅 التاريخ: {sign_date or '—'} | الحالة: {approval_status} | ملاحظات: {notes}")
 
 # ====== البحث عن شكوى ======
 st.header("🔍 البحث عن شكوى")
@@ -368,7 +393,7 @@ if len(active_notes) > 1:
 else:
     st.info("لا توجد شكاوى نشطة حالياً.")
 
-# ====== عرض الإجراءات المردودة ======
+# ====== عرض الإجراءات المردودة مع زر طلب اعتماد المدير ======
 st.header("✅ الإجراءات المردودة حسب النوع:")
 responded_notes = responded_sheet.get_all_values()
 if len(responded_notes) > 1:
@@ -433,7 +458,7 @@ if len(archived) > 1:
 else:
     st.info("لا توجد شكاوى مؤرشفة حالياً.")
 
-# ====== قسم إضافة "معلق أرامكس" (كما طلبت قبل عرض المعلق) ======
+# ====== قسم إضافة "معلق أرامكس" ======
 st.markdown("---")
 st.header("🚚 معلق ارامكس")
 with st.form("add_aramex", clear_on_submit=True):
@@ -456,7 +481,6 @@ st.subheader("📋 قائمة الطلبات المعلقة")
 aramex_pending = aramex_sheet.get_all_values()
 if len(aramex_pending) > 1:
     for i, row in enumerate(aramex_pending[1:], start=2):
-        # نتأكد من طول الصف
         while len(row) < 4:
             row.append("")
         order_id = row[0]
@@ -511,8 +535,6 @@ if len(aramex_archived) > 1:
             if col2.button(f"🗑️ حذف {order_id} من الأرشيف"):
                 if safe_delete(aramex_archive, i):
                     st.warning(f"🗑️ تم حذف {order_id} من أرشيف أرامكس")
-else:
-    st.info("لا توجد شكاوى أرامكس مؤرشفة.")
 
 # ====== تذكير ختامي ======
 st.caption("التغييرات تحفظ في Google Sheets عند كل عملية (append/update/delete). استعلامات Aramex تظهر في الواجهة عند وجود أرقام AWB لكنها لا تُخزن تلقائيًا في الشيت إلا إذا ضفت تحديث لحفظها هناك.")
