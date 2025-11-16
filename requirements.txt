@@ -7,3 +7,5 @@ google-auth-oauthlib
 streamlit-autorefresh
 fpdf
 streamlit-drawable-canvas
+Pillow
+requests
