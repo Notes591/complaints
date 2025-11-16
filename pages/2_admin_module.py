@@ -194,3 +194,5 @@ def run_admin_system():
             st.write("🔽 هذا هو التوقيع بصيغة Base64:")
             st.code(signature_img)
             st.info("يمكنك نسخ هذا الكود أو حفظه في Google Sheet كما تريد.")
+            run_admin_system()
+
