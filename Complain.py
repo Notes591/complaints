@@ -9,6 +9,17 @@ import requests
 import xml.etree.ElementTree as ET
 import re
 from streamlit_autorefresh import st_autorefresh
+import io
+import base64
+from PIL import Image
+import numpy as np
+
+# محاولة استيراد لوحة الرسم للتوقيع؛ إن لم توجد نعرض تعليمات
+try:
+    from streamlit_drawable_canvas import st_canvas
+    CANVAS_AVAILABLE = True
+except Exception:
+    CANVAS_AVAILABLE = False
 
 # ====== تحديث تلقائي (قابلة للتعديل) ======
 # القيمة بالمللي ثانية - الافتراضي 20 دقيقة (1200000). لو تريد 60 ثانية ضع 60000.
@@ -22,9 +33,11 @@ client = gspread.authorize(creds)
 
 # ====== أوراق جوجل شيت ======
 SHEET_NAME = "Complaints"
+# **ملاحظة** أضفنا Sheets خاصة بالميزة الجديدة: ManagerApproval و Settings
 sheet_titles = [
     "Complaints", "Responded", "Archive", "Types",
-    "معلق ارامكس", "أرشيف أرامكس", "ReturnWarehouse", "Order Number"
+    "معلق ارامكس", "أرشيف أرامكس", "ReturnWarehouse", "Order Number",
+    "ManagerApproval", "Settings"
 ]
 
 sheets_dict = {}
@@ -36,6 +49,12 @@ for title in sheet_titles:
         try:
             ss = client.open(SHEET_NAME)
             sheets_dict[title] = ss.add_worksheet(title=title, rows="1000", cols="20")
+            # إذا أنشأنا ورقة Settings نهيئ الخلية B2 لتفادي أخطاء القراءة لاحقًا
+            if title == "Settings":
+                try:
+                    sheets_dict[title].update("A1", [["Setting","Value"]])
+                except Exception:
+                    pass
         except Exception as e2:
             st.error(f"خطأ في الوصول/إنشاء ورقة: {title} - {e2}")
             raise
@@ -48,6 +67,8 @@ aramex_sheet = sheets_dict["معلق ارامكس"]
 aramex_archive = sheets_dict["أرشيف أرامكس"]
 return_warehouse_sheet = sheets_dict["ReturnWarehouse"]
 order_number_sheet = sheets_dict["Order Number"]
+manager_sheet = sheets_dict["ManagerApproval"]
+settings_sheet = sheets_dict["Settings"]
 
 # ====== إعدادات الصفحة ======
 st.set_page_config(page_title="📢 نظام الشكاوى", page_icon="⚠️", layout="wide")
@@ -200,7 +221,39 @@ def cached_aramex_status(awb):
         return ""
     return get_aramex_status(awb)
 
-# ====== دالة عرض الشكوى (كما في كودك) مع بعض تحسينات session_state لتسريع التفاعل ======
+# ====== دوال مساعدة لتخزين/استرجاع الباسورد من Settings ======
+def read_manager_password_from_settings():
+    try:
+        vals = settings_sheet.get_all_values()
+        # نفترض أن القيمة في B2 كما اتفقنا
+        if len(vals) >= 2 and len(vals[1]) >= 2 and vals[1][1].strip() != "":
+            return vals[1][1].strip()
+    except Exception:
+        pass
+    # fallback to st.secrets
+    try:
+        return st.secrets["manager"]["password"]
+    except Exception:
+        return ""
+
+def update_manager_password_in_settings(new_pass):
+    try:
+        # نكتب في B2
+        safe_update(settings_sheet, "B2", [[new_pass]])
+        return True
+    except Exception as e:
+        st.error(f"❌ فشل حفظ الباسورد في Settings: {e}")
+        return False
+
+# ====== دالة تحويل الصورة (numpy) من canvas إلى base64 PNG ======
+def pil_image_to_base64_png_str(img: Image.Image) -> str:
+    buffered = io.BytesIO()
+    img.save(buffered, format="PNG")
+    img_bytes = buffered.getvalue()
+    b64 = base64.b64encode(img_bytes).decode("utf-8")
+    return f"data:image/png;base64,{b64}"
+
+# ====== دالة عرض الشكوى (كما في كودك) مع إضافة زر "طلب اعتماد" ======
 def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
     # نتأكد من طول الصف
     while len(row) < 8:
@@ -244,7 +297,8 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
             if new_inbound:
                 st.info(f"📦 Inbound AWB: {new_inbound} | الحالة: {cached_aramex_status(new_inbound)}")
 
-            col1, col2, col3, col4 = st.columns(4)
+            # أزرار الحفظ والحذف والأرشفة والنقل كما كان
+            col1, col2, col3, col4, col5 = st.columns(5)
             submitted_save = col1.form_submit_button("💾 حفظ")
             submitted_delete = col2.form_submit_button("🗑️ حذف")
             submitted_archive = col3.form_submit_button("📦 أرشفة")
@@ -252,6 +306,9 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
                 submitted_move = col4.form_submit_button("➡️ نقل للإجراءات المردودة")
             else:
                 submitted_move = col4.form_submit_button("⬅️ رجوع للنشطة")
+
+            # **إضافة زر طلب اعتماد** (يرسل السجل لمدير القسم)
+            طلب_اعتماد = col5.form_submit_button("📝 طلب اعتماد")
 
             if submitted_save:
                 safe_update(sheet, f"B{i}", [[new_type]])
@@ -279,6 +336,15 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
                     if safe_append(complaints_sheet, [comp_id, new_type, new_notes, new_action, date_added, restored, new_outbound, new_inbound]):
                         if safe_delete(sheet, i):
                             st.success("✅ انتقلت للنشطة")
+
+            if طلب_اعتماد:
+                # نضيف السجل إلى ورقة ManagerApproval مع معلومات أساسية
+                date_request = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                appended = safe_append(manager_sheet, [comp_id, new_type, new_notes, new_action, date_added, date_request, new_outbound, new_inbound, sheet.title])
+                if appended:
+                    st.success("✉️ تم إرسال طلب الاعتماد للمدير")
+                else:
+                    st.error("❌ فشل إرسال طلب الاعتماد")
 
 # ====== البحث عن شكوى ======
 st.header("🔍 البحث عن شكوى")
@@ -513,6 +579,145 @@ if len(aramex_archived) > 1:
                     st.warning(f"🗑️ تم حذف {order_id} من أرشيف أرامكس")
 else:
     st.info("لا توجد شكاوى أرامكس مؤرشفة.")
+
+# ====== صفحة المدير: تسجيل الدخول، عرض طلبات الاعتماد، التوقيع، واعتماد/رفض + تغيير الباسورد ======
+st.markdown("---")
+st.header("🔐 صفحة المدير - طلبات الاعتماد")
+
+with st.expander("🧾 افتح صفحة المدير"):
+    # نموذج دخول المدير
+    with st.form("manager_login"):
+        manager_input_password = st.text_input("🔑 أدخل باسورد المدير", type="password")
+        manager_login_submit = st.form_submit_button("دخول كمدير")
+    manager_logged_in = False
+    manager_password_actual = read_manager_password_from_settings()
+
+    if manager_login_submit:
+        if manager_input_password and manager_input_password == manager_password_actual:
+            manager_logged_in = True
+            st.success("✅ تم الدخول كمدير")
+        else:
+            st.error("❌ الباسورد غير صحيح")
+
+    if manager_logged_in:
+        # قسم تغيير الباسورد
+        st.subheader("⚙️ تغيير باسورد المدير")
+        with st.form("change_password_form"):
+            current = st.text_input("🔁 الباسورد الحالي", type="password")
+            newp = st.text_input("🔒 الباسورد الجديد", type="password")
+            newp2 = st.text_input("🔒 أعد كتابة الباسورد الجديد", type="password")
+            change_submit = st.form_submit_button("تحديث الباسورد")
+            if change_submit:
+                if current != manager_password_actual:
+                    st.error("❌ الباسورد الحالي غير صحيح")
+                elif not newp or newp != newp2:
+                    st.error("⚠️ تأكد من تطابق الباسورد الجديد")
+                else:
+                    if update_manager_password_in_settings(newp):
+                        st.success("✅ تم تحديث الباسورد في Settings")
+                        # نحدث القيمة المحلية
+                        manager_password_actual = newp
+
+        st.markdown("---")
+        st.subheader("📬 طلبات الاعتماد المرسلة للمدير")
+        # تحميل طلبات الاعتماد من ورقة ManagerApproval
+        manager_requests = manager_sheet.get_all_values()
+        if len(manager_requests) <= 1:
+            st.info("لا توجد طلبات اعتماد حالياً.")
+        else:
+            # عكس الترتيب لإظهار الأحدث أولًا
+            for idx, row in list(enumerate(manager_requests[1:], start=2))[::-1]:
+                # نضمن وجود أعمدة كافية
+                while len(row) < 9:
+                    row.append("")
+                comp_id = row[0]
+                comp_type = row[1]
+                notes = row[2]
+                action_text = row[3]
+                date_added = row[4]
+                date_requested = row[5]
+                outbound_awb = row[6]
+                inbound_awb = row[7]
+                source_sheet = row[8]  # من أي شيت أتى الطلب
+
+                with st.expander(f"🆔 {comp_id} | نوع: {comp_type} | طلب بتاريخ: {date_requested}"):
+                    st.write(f"📝 الملاحظات: {notes}")
+                    st.write(f"✅ الإجراء المقترح: {action_text}")
+                    st.write(f"🗂️ مصدر الطلب: {source_sheet} | تاريخ التسجيل الأصلي: {date_added}")
+                    st.write(f"📦 Outbound: {outbound_awb} | Inbound: {inbound_awb}")
+
+                    # منطقة التوقيع: إذا كانت لوحة الرسم متاحة نعرض st_canvas
+                    signature_b64 = None
+                    if CANVAS_AVAILABLE:
+                        st.caption("✍️ ارسم توقيعك هنا ثم اضغط 'تم الاعتماد' لحفظ التوقيع مع القرار.")
+                        canvas_result = st_canvas(
+                            fill_color="rgba(0,0,0,0)",
+                            stroke_width=2,
+                            stroke_color="#000",
+                            background_color="#fff",
+                            height=200,
+                            width=600,
+                            drawing_mode="freedraw",
+                            key=f"canvas_{idx}"
+                        )
+                        # لو فيه صورة مرسومة نأخذها
+                        if canvas_result and canvas_result.image_data is not None:
+                            # image_data is RGBA numpy array
+                            img_np = canvas_result.image_data
+                            # تحويل RGBA إلى PIL Image
+                            img = Image.fromarray((img_np).astype('uint8'), 'RGBA').convert("RGB")
+                            signature_b64 = pil_image_to_base64_png_str(img)
+                    else:
+                        st.info("لوحة التوقيع غير متاحة. لتفعيلها نفذ:\n`pip install streamlit-drawable-canvas pillow numpy`")
+                        st.caption("بديل: يمكنك نسخ/لصق صورة توقيع أو تحميلها أدناه")
+                        uploaded_sig = st.file_uploader(f"تحميل صورة توقيع لـ {comp_id}", type=["png","jpg","jpeg"], key=f"upload_sig_{idx}")
+                        if uploaded_sig:
+                            try:
+                                img = Image.open(uploaded_sig).convert("RGB")
+                                signature_b64 = pil_image_to_base64_png_str(img)
+                                st.image(img, caption="صورة التوقيع المحمّلة", use_column_width=False)
+                            except Exception as e:
+                                st.error(f"فشل قراءة صورة التوقيع: {e}")
+
+                    col_approve, col_reject = st.columns(2)
+                    approve = col_approve.button("✅ تم الاعتماد", key=f"approve_{idx}")
+                    reject = col_reject.button("❌ رفض الطلب", key=f"reject_{idx}")
+
+                    if approve:
+                        # إذا لم يوجد توقيع مرسوم/محمّل نذكر المدير
+                        if not signature_b64:
+                            # نسأل: هل تريد المتابعة بدون توقيع؟
+                            st.warning("لم تُرفق توقيع. سيتم متابعة الاعتماد بدون توقيع إذا أكدت.")
+                            if not st.button("تأكيد الاعتماد بدون توقيع", key=f"confirm_no_sig_{idx}"):
+                                st.info("انتظر تأكيدك أو قم برسم التوقيع/تحميله.")
+                                # نكمل الحلقة وليس لدينا action إضافي
+                            else:
+                                # اعتمد بدون توقيع
+                                try:
+                                    date_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                    # نضيف للسجل المردود مع العمود الإضافي للتوقيع (قد يكون فارغًا)
+                                    safe_append(responded_sheet, [comp_id, comp_type, notes, action_text + " (Approved by Manager without signature)", date_now, "", outbound_awb, inbound_awb, "ApprovedByManager"])
+                                    # نحذف الطلب من جدول ManagerApproval
+                                    safe_delete(manager_sheet, idx)
+                                    st.success("✅ تم اعتماد الطلب وإعادته إلى Responded بدون توقيع")
+                                except Exception as e:
+                                    st.error(f"❌ حدث خطأ أثناء اعتماد الطلب: {e}")
+                        else:
+                            try:
+                                date_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                # نضيف للسجل المردود مع صورة التوقيع (base64) كعمود إضافي
+                                safe_append(responded_sheet, [comp_id, comp_type, notes, action_text + " (Approved by Manager)", date_now, "", outbound_awb, inbound_awb, signature_b64])
+                                # حذف من ManagerApproval
+                                safe_delete(manager_sheet, idx)
+                                st.success("✅ تم اعتماد الطلب وإعادته إلى Responded مع التوقيع")
+                            except Exception as e:
+                                st.error(f"❌ حدث خطأ أثناء اعتماد الطلب مع التوقيع: {e}")
+
+                    if reject:
+                        # نضعه في الأرشيف أو نحذف فقط من ManagerApproval ونعيد رسالة
+                        if safe_append(archive_sheet, [comp_id, comp_type + " (Rejected by Manager)", notes, "Rejected by Manager", date_requested, "", outbound_awb, inbound_awb]):
+                            safe_delete(manager_sheet, idx)
+                            st.warning("⚠️ تم رفض الطلب ونقل نسخة منه للأرشيف")
 
 # ====== تذكير ختامي ======
 st.caption("التغييرات تحفظ في Google Sheets عند كل عملية (append/update/delete). استعلامات Aramex تظهر في الواجهة عند وجود أرقام AWB لكنها لا تُخزن تلقائيًا في الشيت إلا إذا ضفت تحديث لحفظها هناك.")
