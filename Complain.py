@@ -9,9 +9,6 @@ import requests
 import xml.etree.ElementTree as ET
 import re
 from streamlit_autorefresh import st_autorefresh
-import io
-from PIL import Image
-import base64
 
 # ====== تحديث تلقائي (قابلة للتعديل) ======
 # القيمة بالمللي ثانية - الافتراضي 20 دقيقة (1200000). لو تريد 60 ثانية ضع 60000.
@@ -51,14 +48,6 @@ aramex_sheet = sheets_dict["معلق ارامكس"]
 aramex_archive = sheets_dict["أرشيف أرامكس"]
 return_warehouse_sheet = sheets_dict["ReturnWarehouse"]
 order_number_sheet = sheets_dict["Order Number"]
-
-# ====== مدير التوقيعات (الورقة موجودة طبقاً للي قلت) ======
-try:
-    manager_signatures = client.open(SHEET_NAME).worksheet("ManagerSignatures")
-except Exception:
-    # إذا لم توجد (مع أنك قلت موجودة) ننشئ لتفادي الأخطاء runtime — هذا لا يغير هيكل الشيتات الأخرى
-    ss = client.open(SHEET_NAME)
-    manager_signatures = ss.add_worksheet(title="ManagerSignatures", rows="1000", cols="20")
 
 # ====== إعدادات الصفحة ======
 st.set_page_config(page_title="📢 نظام الشكاوى", page_icon="⚠️", layout="wide")
@@ -254,51 +243,6 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
                 st.info(f"🚚 Outbound AWB: {new_outbound} | الحالة: {cached_aramex_status(new_outbound)}")
             if new_inbound:
                 st.info(f"📦 Inbound AWB: {new_inbound} | الحالة: {cached_aramex_status(new_inbound)}")
-
-            # ====== عرض حالة توقيع المدير + صورة التوقيع (قراءة من ManagerSignatures) ======
-            try:
-                sign_records = manager_signatures.get_all_values()[1:]
-            except Exception:
-                sign_records = []
-
-            for rec in sign_records:
-                # rec expected: [ID, ManagerName, Date, Notes, Status, SignatureBase64, ...]
-                if len(rec) > 0 and str(rec[0]) == str(comp_id):
-                    manager_name = rec[1] if len(rec) > 1 and rec[1] else "—"
-                    sign_date = rec[2] if len(rec) > 2 and rec[2] else "—"
-                    notes_sign = rec[3] if len(rec) > 3 and rec[3] else ""
-                    approval_status = rec[4] if len(rec) > 4 and rec[4] else "—"
-
-                    if approval_status == "معتمد":
-                        st.success(f"🖊️ تم اعتماد الشكوى بواسطة: {manager_name} | 📅 التاريخ: {sign_date}")
-                    elif approval_status == "مرفوض":
-                        st.error(f"❌ تم رفض الشكوى بواسطة: {manager_name} | 📅 التاريخ: {sign_date}")
-                    else:
-                        st.warning(f"⏳ بانتظار توقيع المدير | تاريخ الطلب: {sign_date}")
-
-                    # عرض صورة التوقيع إن وجدت
-                    if len(rec) >= 6 and rec[5]:
-                        try:
-                            sig_bytes = base64.b64decode(rec[5])
-                            sig_img = Image.open(io.BytesIO(sig_bytes))
-                            st.image(sig_img, caption="✍️ توقيع المدير", width=450)
-                        except Exception:
-                            st.warning("⚠️ لا يمكن عرض صورة التوقيع")
-
-                    # === (إضافة بسيطة) نضمن وجود ملاحظة في خانة الإجراء على الشيت نفسه عند الاعتماد ===
-                    try:
-                        if approval_status == "معتمد":
-                            # إذا لم تكن ملاحظة الاعتماد موجودة في نص الإجراء الحالي، نضيفها
-                            note_text = f" | ✔ تم اعتمادها بواسطة {manager_name} بتاريخ {sign_date}"
-                            if note_text.strip() not in (action or ""):
-                                # نحدّث خلية D (الإجراء) في الصف i للصيغة الحالية
-                                try:
-                                    safe_update(sheet, f"D{i}", [[(action or "") + note_text]])
-                                except Exception:
-                                    # عند فشل التحديث نتجاهل — لا نغير هيكل الصف
-                                    pass
-                    except Exception:
-                        pass
 
             col1, col2, col3, col4 = st.columns(4)
             submitted_save = col1.form_submit_button("💾 حفظ")
