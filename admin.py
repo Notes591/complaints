@@ -8,7 +8,10 @@ from PIL import Image
 from streamlit_drawable_canvas import st_canvas
 
 # ====== الاتصال بجوجل شيت ======
-scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+scope = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive"
+]
 
 creds_dict = st.secrets["gcp_service_account"]
 creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
@@ -28,7 +31,7 @@ except Exception:
     complaints_sheet = sheet.add_worksheet(title="Complaints", rows="2000", cols="20")
 
 
-# ===== دالة Retry =====
+# ===== دوال Retry =====
 def safe_update(sheet, cell, value):
     for _ in range(5):
         try:
@@ -57,8 +60,8 @@ def safe_append(sheet, values):
     return False
 
 
-# ===== التوقيع =====
-def draw_signature():
+# ===== دالة التوقيع — مفتاح ثابت لكل شكوى =====
+def draw_signature(unique_key):
     st.subheader("✍️ التوقيع الإلكتروني")
 
     canvas = st_canvas(
@@ -69,7 +72,7 @@ def draw_signature():
         width=450,
         height=200,
         drawing_mode="freedraw",
-        key=f"sig_{time.time()}",
+        key=f"sigpad_{unique_key}",  # ← مفتاح ثابت يمنع اختفاء التوقيع
     )
 
     if canvas.image_data is not None:
@@ -77,7 +80,11 @@ def draw_signature():
         buffer = io.BytesIO()
         img.save(buffer, format="PNG")
         return base64.b64encode(buffer.getvalue()).decode()
+
     return None
+
+
+
 # ===== واجهة المدير =====
 def run_admin():
 
@@ -117,9 +124,9 @@ def run_admin():
         # ❗ قراءة واحدة للشيت — لتجنب 429
         try:
             data = complaints_sheet.get_all_values()
-        except Exception as e:
-            st.error("❌ خطأ في تحميل البيانات")
-            st.stop()
+        except Exception:
+            st.error("❌ فشل في تحميل البيانات من الشيت")
+            return
 
         if len(data) <= 1:
             st.info("لا توجد شكاوى مطلوبة اعتماد.")
@@ -130,6 +137,7 @@ def run_admin():
         for i, row in enumerate(data[1:], start=2):
             while len(row) < 9:
                 row.append("")
+
             if row[3].strip() == "🔵 بانتظار اعتماد المدير":
                 pending.append((i, row))
 
@@ -137,7 +145,7 @@ def run_admin():
             st.info("لا توجد شكاوى عليها طلب اعتماد.")
             return
 
-        # عرض كل شكوى مطلوبة اعتماد
+        # عرض الشكاوى المطلوبة اعتماد
         for row_index, row in pending:
 
             comp_id = row[0]
@@ -151,8 +159,8 @@ def run_admin():
                 st.write(f"📝 الملاحظات: {notes}")
                 st.warning("🔵 هذه الشكوى بانتظار الاعتماد")
 
-                st.write("✍️ **ارسم التوقيع هنا:**")
-                signature = draw_signature()
+                st.write("✍️ **ارسم التوقيع:**")
+                signature = draw_signature(comp_id)  # ← مفتاح ثابت يمنع الاختفاء
 
                 if st.button(f"✔ اعتماد الشكوى {comp_id}", key=f"approve_{comp_id}"):
 
@@ -160,7 +168,6 @@ def run_admin():
                         st.error("⚠ يجب رسم التوقيع أولاً.")
                         st.stop()
 
-                    # تجهيز البيانات الجديدة
                     updated_row = [
                         comp_id,
                         comp_type,
@@ -173,13 +180,14 @@ def run_admin():
                         signature
                     ]
 
-                    # إضافة الصف الجديد
                     safe_append(complaints_sheet, updated_row)
-                    # حذف الصف القديم
                     safe_delete(complaints_sheet, row_index)
 
                     st.success(f"✔ تم اعتماد الشكوى {comp_id}")
                     st.experimental_rerun()
+
+
+
     # -----------------------------------------------------------
     # (2) تغيير كلمة المرور
     # -----------------------------------------------------------
@@ -216,11 +224,12 @@ def run_admin():
 
         st.write("هذه صفحة لاختبار رسم التوقيع فقط — لا يتم حفظ أي شيء هنا.")
 
-        signature_preview = draw_signature()
+        signature_preview = draw_signature("preview")
 
         if signature_preview:
             st.success("✔ تم إنشاء التوقيع")
             st.code(signature_preview, language="text")
+
 
 
 # ===== تشغيل النظام =====
