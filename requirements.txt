@@ -9,5 +9,5 @@ fpdf
 streamlit-drawable-canvas
 Pillow
 requests
-streamlit-digital-signature
+
 
