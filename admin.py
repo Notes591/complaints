@@ -6,6 +6,8 @@ from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
 import time
 from streamlit_drawable_canvas import st_canvas
+import cv2
+import numpy as np
 
 
 # =====================================================
@@ -36,7 +38,7 @@ except Exception:
 
 
 # =====================================================
-#           دوال آمنة للشيت
+#     دوال آمنة
 # =====================================================
 def safe_append(sheet, values):
     for _ in range(5):
@@ -59,29 +61,32 @@ def safe_delete(sheet, index):
 
 
 # =====================================================
-#       دالة التوقيع الإلكتروني — Drawable Canvas
+#   دالة التوقيع — بدون Refresh نهائيًا
 # =====================================================
 def draw_signature(unique_key):
     st.subheader("✍️ التوقيع الإلكتروني")
 
-    # Random key لكل Canvas
-    key = f"canvas_{unique_key}_{time.time()}"
+    canvas_key = f"canvas_{unique_key}"
 
+    # نحفظ آخر رسم داخل session_state
+    if canvas_key not in st.session_state:
+        st.session_state[canvas_key] = None
+
+    # رسم الكانفاس
     canvas_result = st_canvas(
-        fill_color="rgba(0,0,0,0)",     # خلفية شفافة
+        fill_color="rgba(0,0,0,0)",
         stroke_width=3,
         stroke_color="#000000",
         background_color="#FFFFFF",
         height=200,
         width=450,
         drawing_mode="freedraw",
-        key=key,
+        key=canvas_key,
+        update_streamlit=False    # ← أهم سطر يمنع الريفرش
     )
 
+    # إذا فيه صورة جديدة
     if canvas_result.image_data is not None:
-        import cv2
-        import numpy as np
-
         img = canvas_result.image_data
         img = cv2.cvtColor(img, cv2.COLOR_RGBA2RGB)
 
@@ -89,36 +94,46 @@ def draw_signature(unique_key):
         img_bytes = buffer.tobytes()
 
         b64 = base64.b64encode(img_bytes).decode()
-        return b64
 
-    return None
+        # نخزن آخر توقيع
+        st.session_state[canvas_key] = b64
+
+    # نرجع التوقيع من session_state فقط
+    return st.session_state[canvas_key]
+
 
 
 
 # =====================================================
-#                   واجهة المدير
+#                واجهة المدير
 # =====================================================
 def run_admin():
 
     st.title("👑 لوحة تحكم المدير")
 
     # ---- تسجيل الدخول ----
-    st.subheader("🔐 تسجيل الدخول")
-    password = st.text_input("ادخل كلمة المرور", type="password")
+    with st.form("login_form", clear_on_submit=False):
+        st.subheader("🔐 تسجيل الدخول")
+        password = st.text_input("ادخل كلمة المرور", type="password")
+        login = st.form_submit_button("دخول")
 
-    if "admin_password" not in st.session_state:
-        st.session_state.admin_password = "1234"
+    if login:
+        if "admin_password" not in st.session_state:
+            st.session_state.admin_password = "1234"
 
-    if password == "":
-        st.info("من فضلك ادخل كلمة المرور.")
-        return
+        if password != st.session_state.admin_password:
+            st.error("❌ كلمة المرور غير صحيحة")
+            st.stop()
+        else:
+            st.session_state["logged_in"] = True
 
-    if password != st.session_state.admin_password:
-        st.error("❌ كلمة المرور غير صحيحة")
+    if "logged_in" not in st.session_state:
+        st.info("من فضلك سجل الدخول.")
         return
 
     st.success("✔ تم تسجيل الدخول")
     st.write("---")
+
 
     option = st.selectbox("اختر وظيفة:", [
         "🔵 الشكاوى المطلوب اعتمادها",
@@ -129,7 +144,7 @@ def run_admin():
 
 
     # =====================================================
-    #     (1) الشكاوى المطلوب اعتمادها
+    #  (1) الشكاوى المطلوب اعتمادها
     # =====================================================
     if option == "🔵 الشكاوى المطلوب اعتمادها":
 
@@ -175,62 +190,67 @@ def run_admin():
 
                 signature = draw_signature(comp_id)
 
-                if st.button(f"✔ اعتماد الشكوى {comp_id}", key=f"approve_{comp_id}"):
+                with st.form(f"approve_form_{comp_id}"):
+                    submit = st.form_submit_button(f"✔ اعتماد الشكوى {comp_id}")
 
-                    if not signature:
-                        st.error("⚠ يجب رسم التوقيع.")
-                        st.stop()
+                    if submit:
+                        if not signature:
+                            st.error("⚠ يجب رسم التوقيع.")
+                            st.stop()
 
-                    updated_row = [
-                        comp_id,
-                        comp_type,
-                        notes,
-                        "✔ تم اعتماد المدير",
-                        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        "",
-                        outbound,
-                        inbound,
-                        signature
-                    ]
+                        updated_row = [
+                            comp_id,
+                            comp_type,
+                            notes,
+                            "✔ تم اعتماد المدير",
+                            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            "",
+                            outbound,
+                            inbound,
+                            signature
+                        ]
 
-                    safe_append(complaints_sheet, updated_row)
-                    safe_delete(complaints_sheet, row_index)
+                        safe_append(complaints_sheet, updated_row)
+                        safe_delete(complaints_sheet, row_index)
 
-                    st.success(f"✔ تم اعتماد الشكوى {comp_id}")
-                    st.experimental_rerun()
+                        st.success(f"✔ تم اعتماد الشكوى {comp_id}")
+                        st.experimental_rerun()
 
 
 
     # =====================================================
-    #      (2) تغيير كلمة المرور
+    #  (2) تغيير كلمة المرور
     # =====================================================
     if option == "🔑 تغيير كلمة المرور":
 
         st.header("🔑 تغيير كلمة المرور")
 
-        current_pw = st.text_input("كلمة المرور الحالية", type="password")
-        new_pw = st.text_input("كلمة المرور الجديدة", type="password")
-        confirm_pw = st.text_input("تأكيد كلمة المرور الجديدة", type="password")
+        with st.form("pw_form"):
+            current_pw = st.text_input("كلمة المرور الحالية", type="password")
+            new_pw = st.text_input("كلمة المرور الجديدة", type="password")
+            confirm_pw = st.text_input("تأكيد كلمة المرور الجديدة", type="password")
 
-        if st.button("💾 حفظ كلمة المرور"):
+            save = st.form_submit_button("💾 حفظ كلمة المرور")
 
-            if current_pw != st.session_state.admin_password:
-                st.error("❌ كلمة المرور الحالية غير صحيحة")
+            if save:
 
-            elif new_pw != confirm_pw:
-                st.error("⚠ كلمة المرور غير متطابقة")
+                if current_pw != st.session_state.admin_password:
+                    st.error("❌ كلمة المرور الحالية غير صحيحة")
 
-            elif new_pw.strip() == "":
-                st.error("⚠ كلمة المرور لا يمكن أن تكون فارغة")
+                elif new_pw != confirm_pw:
+                    st.error("⚠ كلمة المرور الجديدة غير متطابقة")
 
-            else:
-                st.session_state.admin_password = new_pw
-                st.success("✔ تم تغيير كلمة المرور بنجاح")
+                elif new_pw.strip() == "":
+                    st.error("⚠ كلمة المرور لا يمكن أن تكون فارغة")
+
+                else:
+                    st.session_state.admin_password = new_pw
+                    st.success("✔ تم تغيير كلمة المرور بنجاح")
 
 
 
     # =====================================================
-    #         (3) صفحة تجربة التوقيع
+    #  (3) تجربة التوقيع
     # =====================================================
     if option == "✍️ تجربة التوقيع":
 
@@ -246,7 +266,7 @@ def run_admin():
 
 
 # =====================================================
-#                   تشغيل النظام
+# تشغيل النظام
 # =====================================================
 if __name__ == "__main__":
     run_admin()
