@@ -9,8 +9,11 @@ import requests
 import xml.etree.ElementTree as ET
 import re
 from streamlit_autorefresh import st_autorefresh
+import base64
+from io import BytesIO
+from PIL import Image
 
-# ====== تحديث تلقائي (قابلة للتعديل) ======
+# ====== تحديث تلقائي ======
 st_autorefresh(interval=1200000, key="auto_refresh")
 
 # ====== الاتصال بجوجل شيت ======
@@ -35,7 +38,7 @@ for title in sheet_titles:
             ss = client.open(SHEET_NAME)
             sheets_dict[title] = ss.add_worksheet(title=title, rows="1000", cols="20")
         except Exception as e2:
-            st.error(f"خطأ في الوصول/إنشاء ورقة: {title} - {e2}")
+            st.error(f"خطأ في إنشاء ورقة: {title} - {e2}")
             raise
 
 complaints_sheet = sheets_dict["Complaints"]
@@ -57,11 +60,9 @@ def safe_append(sheet, row_data, retries=5, delay=1):
         try:
             sheet.append_row(row_data)
             return True
-        except gspread.exceptions.APIError:
+        except:
             time.sleep(delay)
-        except Exception:
-            time.sleep(delay)
-    st.error("❌ فشل append_row بعد عدة محاولات.")
+    st.error("❌ فشل append_row بعد محاولات متعددة.")
     return False
 
 def safe_update(sheet, cell_range, values, retries=5, delay=1):
@@ -69,11 +70,9 @@ def safe_update(sheet, cell_range, values, retries=5, delay=1):
         try:
             sheet.update(cell_range, values)
             return True
-        except gspread.exceptions.APIError:
+        except:
             time.sleep(delay)
-        except Exception:
-            time.sleep(delay)
-    st.error("❌ فشل update بعد عدة محاولات.")
+    st.error("❌ فشل update بعد محاولات متعددة.")
     return False
 
 def safe_delete(sheet, row_index, retries=5, delay=1):
@@ -81,22 +80,21 @@ def safe_delete(sheet, row_index, retries=5, delay=1):
         try:
             sheet.delete_rows(row_index)
             return True
-        except gspread.exceptions.APIError:
+        except:
             time.sleep(delay)
-        except Exception:
-            time.sleep(delay)
-    st.error("❌ فشل delete_rows بعد عدة محاولات.")
+    st.error("❌ فشل delete_rows بعد محاولات متعددة.")
     return False
 
 # ====== تحميل الأنواع ======
 try:
     types_list = [row[0] for row in types_sheet.get_all_values()[1:]]
-except Exception:
+except:
     types_list = []
 
+# ====== ReturnWarehouse ======
 try:
     return_warehouse_data = return_warehouse_sheet.get_all_values()[1:]
-except Exception:
+except:
     return_warehouse_data = []
 
 def get_returnwarehouse_record(order_id):
@@ -113,9 +111,10 @@ def get_returnwarehouse_record(order_id):
             }
     return None
 
+# ====== Order Number ======
 try:
     order_number_data = order_number_sheet.get_all_values()[1:]
-except Exception:
+except:
     order_number_data = []
 
 def get_order_status(order_id):
@@ -123,14 +122,13 @@ def get_order_status(order_id):
         if len(row) > 1 and str(row[1]) == str(order_id):
             delegate = row[3] if len(row) > 3 else ""
             if delegate.strip().lower() == "aramex":
-                return "📦 مشحونة مع أرامكس الطلب الاساسي"
+                return "📦 مشحونة مع أرامكس"
             elif delegate.strip():
-                return f"🚚 مشحونة مع مندوب الرياض ({delegate})"
-            else:
-                return "⏳ تحت المتابعة"
+                return f"🚚 مشحونة مع مندوب ({delegate})"
+            return "⏳ تحت المتابعة"
     return "⏳ تحت المتابعة"
 
-# ====== إعداد Aramex ======
+# ====== Aramex API ======
 client_info = {
     "UserName": "fitnessworld525@gmail.com",
     "Password": "Aa12345678@",
@@ -209,17 +207,17 @@ def get_aramex_status(awb_number, search_type="Waybill"):
     except Exception as e:
         return f"⚠ خطأ: {e}"
 
-# ====== Cache ======
+# ====== Cache حالات Aramex ======
 @st.cache_data(ttl=300)
 def cached_aramex_status(awb):
     if not awb or str(awb).strip() == "":
         return ""
     return get_aramex_status(awb)
 
-# ====== دالة عرض الشكوى ======
+# ====== دالة عرض الشكوى (render_complaint) ======
 def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
 
-    # ضمان أن الصف لا ينقص عنه أعمدة
+    # نتأكد من طول الصف
     while len(row) < 9:
         row.append("")
 
@@ -231,21 +229,21 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
     restored = row[5] if len(row) > 5 else ""
     outbound_awb = row[6] if len(row) > 6 else ""
     inbound_awb = row[7] if len(row) > 7 else ""
-    signature_image = row[8] if len(row) > 8 else ""   # التوقيع الالكتروني
+    signature_image = row[8] if len(row) > 8 else ""   # التوقيع (Base64)
 
     order_status = get_order_status(comp_id)
 
     with st.expander(f"🆔 {comp_id} | 📌 {comp_type} | 📅 {date_added} {restored} | {order_status}"):
 
-        # -----------------------------------------------------------
-        # SIGNATURE_DISPLAY (إضافة عرض التوقيع الإلكتروني الحقيقي)
-        # -----------------------------------------------------------
-        if signature_image.strip() != "":
+        # ===== عرض التوقيع الإلكتروني الحقيقي =====
+        if signature_image and str(signature_image).strip() != "":
             try:
-                st.image(signature_image, width=150, caption="✔ تم الاعتماد - التوقيع الإلكتروني")
+                img_bytes = base64.b64decode(signature_image)
+                img = Image.open(BytesIO(img_bytes))
+                st.image(img, width=150, caption="✔ تم الاعتماد - التوقيع الإلكتروني")
             except:
                 st.warning("⚠ لا يمكن عرض صورة التوقيع")
-        # -----------------------------------------------------------
+        # =========================================
 
         with st.form(key=f"form_{comp_id}_{sheet.title}"):
 
@@ -254,13 +252,12 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
             st.write(f"✅ الإجراء: {action}")
             st.caption(f"📅 تاريخ التسجيل: {date_added}")
 
-            # ReturnWarehouse
             rw_record = get_returnwarehouse_record(comp_id)
             if rw_record:
                 st.info(
-                    f"📦 بيانات ReturnWarehouse:\n"
+                    f"📦 سجل من ReturnWarehouse:\n"
                     f"رقم الطلب: {rw_record['رقم الطلب']}\n"
-                    f"الفاتورة: {rw_record['الفاتورة']}\n"
+                    f"الفاتورة: {rw_record['الْفَاتُورَة'] if 'الْفَاتُورَة' in rw_record else rw_record['الفاتورة']}\n"
                     f"التاريخ: {rw_record['التاريخ']}\n"
                     f"الزبون: {rw_record['الزبون']}\n"
                     f"المبلغ: {rw_record['المبلغ']}\n"
@@ -268,52 +265,53 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
                     f"البيان: {rw_record['البيان']}"
                 )
 
-            new_type = st.selectbox(
-                "✏️ عدل نوع الشكوى",
-                [comp_type] + [t for t in types_list if t != comp_type],
-                index=0
-            )
-
+            new_type = st.selectbox("✏️ عدل نوع الشكوى", [comp_type] + [t for t in types_list if t != comp_type], index=0)
             new_notes = st.text_area("✏️ عدل الملاحظات", value=notes)
             new_action = st.text_area("✏️ عدل الإجراء", value=action)
             new_outbound = st.text_input("✏️ Outbound AWB", value=outbound_awb)
             new_inbound = st.text_input("✏️ Inbound AWB", value=inbound_awb)
 
             if new_outbound:
-                st.info(f"🚚 Outbound AWB {new_outbound} | {cached_aramex_status(new_outbound)}")
-
+                st.info(f"🚚 Outbound AWB: {new_outbound} | الحالة: {cached_aramex_status(new_outbound)}")
             if new_inbound:
-                st.info(f"📦 Inbound AWB {new_inbound} | {cached_aramex_status(new_inbound)}")
-
-            col1, col2, col3, col4 = st.columns(4)
+                st.info(f"📦 Inbound AWB: {new_inbound} | الحالة: {cached_aramex_status(new_inbound)}")
+            # ===== أزرار التفاعل (حفظ، حذف، أرشفة، نقل، طلب اعتماد) =====
+            col1, col2, col3, col4, col5 = st.columns(5)
             submitted_save = col1.form_submit_button("💾 حفظ")
             submitted_delete = col2.form_submit_button("🗑️ حذف")
             submitted_archive = col3.form_submit_button("📦 أرشفة")
             if not in_responded:
-                submitted_move = col4.form_submit_button("➡️ نقل للمردودة")
+                submitted_move = col4.form_submit_button("➡️ نقل للإجراءات المردودة")
             else:
                 submitted_move = col4.form_submit_button("⬅️ رجوع للنشطة")
 
+            # زر طلب اعتماد
+            submitted_request_approval = col5.form_submit_button("🔵 طلب اعتماد")
+
+            # ===== تنفيذ: حفظ =====
             if submitted_save:
                 safe_update(sheet, f"B{i}", [[new_type]])
                 safe_update(sheet, f"C{i}", [[new_notes]])
                 safe_update(sheet, f"D{i}", [[new_action]])
                 safe_update(sheet, f"G{i}", [[new_outbound]])
                 safe_update(sheet, f"H{i}", [[new_inbound]])
-                st.success("✅ تم التعديل بنجاح")
+                st.success("✅ تم التعديل")
 
+            # ===== تنفيذ: حذف =====
             if submitted_delete:
                 if safe_delete(sheet, i):
                     st.warning("🗑️ تم حذف الشكوى")
 
+            # ===== تنفيذ: أرشفة =====
             if submitted_archive:
                 if safe_append(
                     archive_sheet,
                     [comp_id, new_type, new_notes, new_action, date_added, restored, new_outbound, new_inbound, signature_image]
                 ):
                     if safe_delete(sheet, i):
-                        st.success("♻️ تم أرشفة الشكوى")
+                        st.success("♻️ الشكوى انتقلت للأرشيف")
 
+            # ===== تنفيذ: نقل بين النشطة ↔ المردودة =====
             if submitted_move:
                 if not in_responded:
                     if safe_append(
@@ -321,14 +319,23 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
                         [comp_id, new_type, new_notes, new_action, date_added, restored, new_outbound, new_inbound, signature_image]
                     ):
                         if safe_delete(sheet, i):
-                            st.success("➡️ انتقلت للمردودة")
+                            st.success("➡️ تم نقل الشكوى إلى المردودة")
                 else:
                     if safe_append(
                         complaints_sheet,
                         [comp_id, new_type, new_notes, new_action, date_added, restored, new_outbound, new_inbound, signature_image]
                     ):
                         if safe_delete(sheet, i):
-                            st.success("⬅️ تم الإرجاع للنشطة")
+                            st.success("⬅️ تم إرجاع الشكوى للنشطة")
+
+            # ===== تنفيذ: طلب اعتماد =====
+            if submitted_request_approval:
+                try:
+                    safe_update(sheet, f"D{i}", [["🔵 بانتظار اعتماد المدير"]])
+                    st.success("🔵 تم إرسال طلب الاعتماد للمدير")
+                except Exception:
+                    st.error("❌ فشل في إرسال طلب الاعتماد")
+
 # ====== البحث عن شكوى ======
 st.header("🔍 البحث عن شكوى")
 search_id = st.text_input("أدخل رقم الشكوى للبحث")
@@ -361,6 +368,7 @@ if search_id.strip():
 
     if not found:
         st.error("⚠️ لم يتم العثور على الشكوى")
+
 
 # ====== تسجيل شكوى جديدة ======
 st.header("➕ تسجيل شكوى جديدة")
@@ -403,7 +411,7 @@ with st.form("add_complaint", clear_on_submit=True):
             if comp_id in active_ids or comp_id in responded_ids:
                 st.error("⚠️ الشكوى مسجلة بالفعل")
 
-            # موجودة في الأرشيف → يجب استرجاعها
+            # استرجاع من الأرشيف
             elif comp_id in archive_ids:
                 try:
                     archived_rows = archive_sheet.get_all_values()[1:]
@@ -412,6 +420,7 @@ with st.form("add_complaint", clear_on_submit=True):
 
                 for idx, row in enumerate(archived_rows, start=2):
                     if str(row[0]) == comp_id:
+
                         restored_type = row[1] if len(row) > 1 else ""
                         restored_notes = row[2] if len(row) > 2 else ""
                         restored_action = row[3] if len(row) > 3 else ""
@@ -451,9 +460,9 @@ with st.form("add_complaint", clear_on_submit=True):
                         [comp_id, comp_type, notes, "", date_now, "", outbound_awb, inbound_awb, ""]
                     ):
                         st.success("✅ تمت إضافة الشكوى (نشطة)")
-
         else:
             st.error("⚠️ يجب إدخال رقم شكوى واختيار نوع صحيح")
+
 
 # ====== عرض الشكاوى النشطة ======
 st.header("📋 الشكاوى النشطة:")
@@ -464,7 +473,6 @@ if len(active_data) > 1:
         render_complaint(complaints_sheet, i, row)
 else:
     st.info("لا توجد شكاوى نشطة حالياً.")
-
 # ====== عرض الإجراءات المردودة ======
 st.header("✅ الإجراءات المردودة حسب النوع:")
 responded_data = responded_sheet.get_all_values()
@@ -524,6 +532,8 @@ if len(responded_data) > 1:
 
 else:
     st.info("لا توجد شكاوى مردودة حالياً.")
+
+
 # ====== عرض الأرشيف ======
 st.header("📦 الأرشيف:")
 archived_data = archive_sheet.get_all_values()
@@ -546,7 +556,8 @@ if len(archived_data) > 1:
 else:
     st.info("لا توجد شكاوى مؤرشفة حالياً.")
 
-# ====== قسم إضافة "معلق أرامكس" ======
+
+# ====== قسم إضافة 'معلق أرامكس' ======
 st.markdown("---")
 st.header("🚚 معلق ارامكس")
 
@@ -566,6 +577,7 @@ with st.form("add_aramex", clear_on_submit=True):
                 st.error("❌ فشل في تسجيل الطلب")
         else:
             st.error("⚠️ يجب إدخال رقم الطلب + الحالة + الإجراء")
+
 
 # ====== عرض طلبات معلق أرامكس ======
 st.subheader("📋 قائمة الطلبات المعلقة")
@@ -615,6 +627,7 @@ if len(aramex_pending) > 1:
 else:
     st.info("لا توجد طلبات معلقة حالياً.")
 
+
 # ====== عرض أرشيف أرامكس ======
 st.markdown("---")
 st.header("📦 أرشيف أرامكس:")
@@ -653,4 +666,4 @@ else:
     st.info("لا توجد بيانات في أرشيف أرامكس.")
 
 # ====== نهاية الملف ======
-st.caption("✔ جميع العمليات تتم مباشرة مع Google Sheets — بيانات التوقيع الإلكتروني يتم عرضها الآن داخل كل شكوى معتمدة.")
+st.caption("✔ جميع العمليات تتم مباشرة مع Google Sheets — النظام محدث بالتوقيع الإلكتروني وطلب الاعتماد.")
