@@ -4,7 +4,6 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
 import time
-from streamlit_signature_pad import st_signature_pad
 
 
 # ====== الاتصال بجوجل شيت ======
@@ -31,17 +30,8 @@ except Exception:
     complaints_sheet = sheet.add_worksheet(title="Complaints", rows="2000", cols="20")
 
 
+
 # ====== دوال Retry ======
-def safe_update(sheet, cell, value):
-    for _ in range(5):
-        try:
-            sheet.update(cell, value)
-            return True
-        except:
-            time.sleep(1)
-    return False
-
-
 def safe_delete(sheet, index):
     for _ in range(5):
         try:
@@ -62,27 +52,77 @@ def safe_append(sheet, values):
     return False
 
 
-# ===== التوقيع الإلكتروني باستخدام streamlit-signature-pad =====
+
+# ====== دالة التوقيع (HTML + JS تعمل على Streamlit Cloud 100%) ======
 def draw_signature(unique_key):
     st.subheader("✍️ التوقيع الإلكتروني")
 
-    signature_data = st_signature_pad(
-        key=f"sig_{unique_key}",
-        height=200,
-        pen_color="black",
-        background_color="white"
-    )
+    canvas_id = f"canvas_{unique_key}"
 
-    if signature_data:
-        # signature_data = "data:image/png;base64,xxxxxx"
-        sig_b64 = signature_data.split(",")[1]   # إزالة header
-        return sig_b64
+    html_code = f"""
+    <style>
+    #{canvas_id} {{
+        border: 2px solid #000;
+        border-radius: 5px;
+        touch-action: none;
+    }}
+    </style>
+
+    <canvas id="{canvas_id}" width="450" height="200"></canvas><br>
+
+    <button onclick="clearCanvas_{unique_key}()">مسح</button>
+    <button onclick="saveCanvas_{unique_key}()">حفظ</button>
+
+    <script>
+    const canvas_{unique_key} = document.getElementById("{canvas_id}");
+    const ctx_{unique_key} = canvas_{unique_key}.getContext("2d");
+    let drawing_{unique_key} = false;
+
+    canvas_{unique_key}.addEventListener("mousedown", () => drawing_{unique_key} = true);
+    canvas_{unique_key}.addEventListener("mouseup", () => drawing_{unique_key} = false);
+    canvas_{unique_key}.addEventListener("mouseout", () => drawing_{unique_key} = false);
+
+    canvas_{unique_key}.addEventListener("mousemove", function(e) {{
+        if (!drawing_{unique_key}) return;
+        const rect = canvas_{unique_key}.getBoundingClientRect();
+        ctx_{unique_key}.lineWidth = 3;
+        ctx_{unique_key}.lineCap = "round";
+        ctx_{unique_key}.strokeStyle = "black";
+        ctx_{unique_key}.lineTo(e.clientX - rect.left, e.clientY - rect.top);
+        ctx_{unique_key}.stroke();
+        ctx_{unique_key}.beginPath();
+        ctx_{unique_key}.moveTo(e.clientX - rect.left, e.clientY - rect.top);
+    }});
+
+    function clearCanvas_{unique_key}() {{
+        ctx_{unique_key}.clearRect(0, 0, canvas_{unique_key}.width, canvas_{unique_key}.height);
+    }}
+
+    function saveCanvas_{unique_key}() {{
+        const dataURL = canvas_{unique_key}.toDataURL("image/png");
+        const input = window.parent.document.getElementById("{canvas_id}_data");
+        input.value = dataURL;
+        input.dispatchEvent(new Event('input', {{ bubbles: true }}));
+    }}
+    </script>
+
+    <input type="hidden" id="{canvas_id}_data" name="{canvas_id}_data">
+    """
+
+    st.components.v1.html(html_code, height=330)
+
+    data_input = st.text_input("", key=f"{canvas_id}_data", label_visibility="collapsed")
+
+    if data_input and "base64" in data_input:
+        return data_input.split(",")[1]
 
     return None
 
 
 
-# ========== واجهة المدير ==========
+# =========================================================
+# واجهة المدير
+# =========================================================
 def run_admin():
 
     st.title("👑 لوحة تحكم المدير")
@@ -111,14 +151,14 @@ def run_admin():
         "✍️ التوقيع الإلكتروني"
     ])
 
-    # -----------------------------------------------------------
+
+    # ======================================================
     # (1) الشكاوى المطلوب اعتمادها
-    # -----------------------------------------------------------
+    # ======================================================
     if option == "🔵 الشكاوى المطلوب اعتمادها":
 
         st.header("🔵 الشكاوى المطلوب اعتمادها")
 
-        # قراءة الشيت مرة واحدة فقط
         try:
             data = complaints_sheet.get_all_values()
         except Exception:
@@ -141,7 +181,6 @@ def run_admin():
             st.info("لا توجد شكاوى عليها طلب اعتماد.")
             return
 
-        # عرض كل شكوى مطلوبة اعتماد
         for row_index, row in pending:
 
             comp_id = row[0]
@@ -184,9 +223,9 @@ def run_admin():
 
 
 
-    # -----------------------------------------------------------
+    # ======================================================
     # (2) تغيير كلمة المرور
-    # -----------------------------------------------------------
+    # ======================================================
     if option == "🔑 تغيير كلمة المرور":
 
         st.header("🔑 تغيير كلمة المرور")
@@ -201,7 +240,7 @@ def run_admin():
                 st.error("❌ كلمة المرور الحالية غير صحيحة")
 
             elif new_pw != confirm_pw:
-                st.error("⚠ كلمة المرور لا تتطابق")
+                st.error("⚠ كلمة المرور الجديدة غير متطابقة")
 
             elif new_pw.strip() == "":
                 st.error("⚠ كلمة المرور لا يمكن أن تكون فارغة")
@@ -212,18 +251,18 @@ def run_admin():
 
 
 
-    # -----------------------------------------------------------
-    # (3) صفحة التجربة (لا يتم حفظ التوقيع)
-    # -----------------------------------------------------------
+    # ======================================================
+    # (3) صفحة اختبار التوقيع
+    # ======================================================
     if option == "✍️ التوقيع الإلكتروني":
 
-        st.header("✍️ تجربة التوقيع الإلكتروني")
+        st.header("✍️ تجربة رسم التوقيع")
 
-        signature_preview = draw_signature("preview")
+        sig_test = draw_signature("preview")
 
-        if signature_preview:
+        if sig_test:
             st.success("✔ تم إنشاء التوقيع")
-            st.code(signature_preview)
+            st.code(sig_test)
 
 
 
