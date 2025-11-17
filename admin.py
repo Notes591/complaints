@@ -4,9 +4,110 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
 import time
+import streamlit.components.v1 as components
 
 
-# ====== الاتصال بجوجل شيت ======
+# =====================================================
+#             جافاسكربت listener لاستقبال التوقيع
+# =====================================================
+if "js_listener_added" not in st.session_state:
+    st.session_state.js_listener_added = True
+
+    components.html("""
+    <script>
+    window.addEventListener("message", (event) => {
+        if (event.data.type === "save_sig") {
+            const key = event.data.key;
+            const data = event.data.data;
+            const input = window.parent.document.querySelector(`input[id='${key}']`);
+
+            if (input) {
+                input.value = data.split(",")[1];     // Base64 بدون header
+                input.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+        }
+    });
+    </script>
+    """, height=0)
+
+
+
+# =====================================================
+#       دالة التوقيع الإلكتروني (HTML + JS)
+# =====================================================
+def draw_signature(unique_key):
+    st.subheader("✍️ التوقيع الإلكتروني")
+
+    canvas_id = f"canvas_{unique_key}"
+    hidden_id = f"hidden_{unique_key}"
+
+    html_code = f"""
+    <style>
+        #{canvas_id} {{
+            border: 2px solid black;
+            border-radius: 5px;
+            touch-action: none;
+        }}
+    </style>
+
+    <canvas id="{canvas_id}" width="450" height="200"></canvas><br>
+
+    <button onclick="clearCanvas()">مسح</button>
+    <button onclick="saveSignature()">حفظ</button>
+
+    <script>
+
+        let canvas = document.getElementById("{canvas_id}");
+        let ctx = canvas.getContext("2d");
+        let drawing = false;
+
+        canvas.addEventListener("mousedown", () => drawing = true);
+        canvas.addEventListener("mouseup", () => drawing = false);
+        canvas.addEventListener("mouseout", () => drawing = false);
+
+        canvas.addEventListener("mousemove", function(e) {{
+            if (!drawing) return;
+
+            let rect = canvas.getBoundingClientRect();
+            ctx.lineWidth = 3;
+            ctx.lineCap = "round";
+            ctx.strokeStyle = "black";
+
+            ctx.lineTo(e.clientX - rect.left, e.clientY - rect.top);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(e.clientX - rect.left, e.clientY - rect.top);
+        }});
+
+        function clearCanvas() {{
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+        }}
+
+        function saveSignature() {{
+            const dataUrl = canvas.toDataURL("image/png");
+            window.parent.postMessage({{
+                "type": "save_sig",
+                "key": "{hidden_id}",
+                "data": dataUrl
+            }}, "*");
+        }}
+
+    </script>
+    <input type="hidden" id="{hidden_id}">
+    """
+
+    st.components.v1.html(html_code, height=320)
+
+    # استقبال التوقيع من JS
+    signature_b64 = st.text_input("", key=hidden_id, label_visibility="collapsed")
+
+    return signature_b64 if signature_b64 else None
+
+
+
+# =====================================================
+#                 الاتصال بجوجل شيت
+# =====================================================
 scope = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive"
@@ -31,17 +132,9 @@ except Exception:
 
 
 
-# ====== دوال Retry ======
-def safe_delete(sheet, index):
-    for _ in range(5):
-        try:
-            sheet.delete_rows(index)
-            return True
-        except:
-            time.sleep(1)
-    return False
-
-
+# =====================================================
+#              دوال retry للشيت
+# =====================================================
 def safe_append(sheet, values):
     for _ in range(5):
         try:
@@ -52,77 +145,22 @@ def safe_append(sheet, values):
     return False
 
 
-
-# ====== دالة التوقيع (HTML + JS تعمل على Streamlit Cloud 100%) ======
-def draw_signature(unique_key):
-    st.subheader("✍️ التوقيع الإلكتروني")
-
-    canvas_id = f"canvas_{unique_key}"
-
-    html_code = f"""
-    <style>
-    #{canvas_id} {{
-        border: 2px solid #000;
-        border-radius: 5px;
-        touch-action: none;
-    }}
-    </style>
-
-    <canvas id="{canvas_id}" width="450" height="200"></canvas><br>
-
-    <button onclick="clearCanvas_{unique_key}()">مسح</button>
-    <button onclick="saveCanvas_{unique_key}()">حفظ</button>
-
-    <script>
-    const canvas_{unique_key} = document.getElementById("{canvas_id}");
-    const ctx_{unique_key} = canvas_{unique_key}.getContext("2d");
-    let drawing_{unique_key} = false;
-
-    canvas_{unique_key}.addEventListener("mousedown", () => drawing_{unique_key} = true);
-    canvas_{unique_key}.addEventListener("mouseup", () => drawing_{unique_key} = false);
-    canvas_{unique_key}.addEventListener("mouseout", () => drawing_{unique_key} = false);
-
-    canvas_{unique_key}.addEventListener("mousemove", function(e) {{
-        if (!drawing_{unique_key}) return;
-        const rect = canvas_{unique_key}.getBoundingClientRect();
-        ctx_{unique_key}.lineWidth = 3;
-        ctx_{unique_key}.lineCap = "round";
-        ctx_{unique_key}.strokeStyle = "black";
-        ctx_{unique_key}.lineTo(e.clientX - rect.left, e.clientY - rect.top);
-        ctx_{unique_key}.stroke();
-        ctx_{unique_key}.beginPath();
-        ctx_{unique_key}.moveTo(e.clientX - rect.left, e.clientY - rect.top);
-    }});
-
-    function clearCanvas_{unique_key}() {{
-        ctx_{unique_key}.clearRect(0, 0, canvas_{unique_key}.width, canvas_{unique_key}.height);
-    }}
-
-    function saveCanvas_{unique_key}() {{
-        const dataURL = canvas_{unique_key}.toDataURL("image/png");
-        const input = window.parent.document.getElementById("{canvas_id}_data");
-        input.value = dataURL;
-        input.dispatchEvent(new Event('input', {{ bubbles: true }}));
-    }}
-    </script>
-
-    <input type="hidden" id="{canvas_id}_data" name="{canvas_id}_data">
-    """
-
-    st.components.v1.html(html_code, height=330)
-
-    data_input = st.text_input("", key=f"{canvas_id}_data", label_visibility="collapsed")
-
-    if data_input and "base64" in data_input:
-        return data_input.split(",")[1]
-
-    return None
+def safe_delete(sheet, index):
+    for _ in range(5):
+        try:
+            sheet.delete_rows(index)
+            return True
+        except:
+            time.sleep(1)
+    return False
 
 
 
-# =========================================================
-# واجهة المدير
-# =========================================================
+
+
+# =====================================================
+#                واجهة المدير الرئيسية
+# =====================================================
 def run_admin():
 
     st.title("👑 لوحة تحكم المدير")
@@ -145,6 +183,8 @@ def run_admin():
     st.success("✔ تم تسجيل الدخول")
     st.write("---")
 
+
+    # قائمة وظائف المدير
     option = st.selectbox("اختر وظيفة:", [
         "🔵 الشكاوى المطلوب اعتمادها",
         "🔑 تغيير كلمة المرور",
@@ -152,12 +192,13 @@ def run_admin():
     ])
 
 
-    # ======================================================
-    # (1) الشكاوى المطلوب اعتمادها
-    # ======================================================
+
+    # =====================================================
+    #      (1) الشكاوى المطلوبة اعتمادها
+    # =====================================================
     if option == "🔵 الشكاوى المطلوب اعتمادها":
 
-        st.header("🔵 الشكاوى المطلوب اعتمادها")
+        st.header("🔵 الشكاوى المطلوبة اعتمادها")
 
         try:
             data = complaints_sheet.get_all_values()
@@ -170,6 +211,7 @@ def run_admin():
             return
 
         pending = []
+
         for i, row in enumerate(data[1:], start=2):
             while len(row) < 9:
                 row.append("")
@@ -180,6 +222,7 @@ def run_admin():
         if not pending:
             st.info("لا توجد شكاوى عليها طلب اعتماد.")
             return
+
 
         for row_index, row in pending:
 
@@ -194,13 +237,13 @@ def run_admin():
                 st.write(f"📝 الملاحظات: {notes}")
                 st.warning("🔵 هذه الشكوى بانتظار الاعتماد")
 
-                st.write("✍️ **ارسم التوقيع بالأسفل:**")
+                st.write("✍️ **ارسم التوقيع ثم اضغط حفظ:**")
                 signature = draw_signature(comp_id)
 
                 if st.button(f"✔ اعتماد الشكوى {comp_id}", key=f"approve_{comp_id}"):
 
                     if not signature:
-                        st.error("⚠ يجب رسم التوقيع أولاً.")
+                        st.error("⚠ يجب رسم التوقيع ثم الضغط على حفظ")
                         st.stop()
 
                     updated_row = [
@@ -223,9 +266,9 @@ def run_admin():
 
 
 
-    # ======================================================
-    # (2) تغيير كلمة المرور
-    # ======================================================
+    # =====================================================
+    #      (2) تغيير كلمة المرور
+    # =====================================================
     if option == "🔑 تغيير كلمة المرور":
 
         st.header("🔑 تغيير كلمة المرور")
@@ -251,21 +294,22 @@ def run_admin():
 
 
 
-    # ======================================================
-    # (3) صفحة اختبار التوقيع
-    # ======================================================
+    # =====================================================
+    #      (3) تجربة التوقيع
+    # =====================================================
     if option == "✍️ التوقيع الإلكتروني":
 
         st.header("✍️ تجربة رسم التوقيع")
 
         sig_test = draw_signature("preview")
-
         if sig_test:
-            st.success("✔ تم إنشاء التوقيع")
+            st.success("✔ تم استقبال التوقيع!")
             st.code(sig_test)
 
 
 
-# ===== تشغيل النظام =====
+# =====================================================
+#                    تشغيل النظام
+# =====================================================
 if __name__ == "__main__":
     run_admin()
