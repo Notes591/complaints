@@ -6,8 +6,8 @@ from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
 import time
 from streamlit_drawable_canvas import st_canvas
-import cv2
-import numpy as np
+from PIL import Image
+import io
 
 
 # =====================================================
@@ -38,7 +38,7 @@ except Exception:
 
 
 # =====================================================
-#     دوال آمنة
+#     دوال آمنة للشيت
 # =====================================================
 def safe_append(sheet, values):
     for _ in range(5):
@@ -61,18 +61,16 @@ def safe_delete(sheet, index):
 
 
 # =====================================================
-#   دالة التوقيع — بدون Refresh نهائيًا
+#   دالة التوقيع — بدون Refresh — بدون cv2
 # =====================================================
 def draw_signature(unique_key):
     st.subheader("✍️ التوقيع الإلكتروني")
 
     canvas_key = f"canvas_{unique_key}"
 
-    # نحفظ آخر رسم داخل session_state
     if canvas_key not in st.session_state:
         st.session_state[canvas_key] = None
 
-    # رسم الكانفاس
     canvas_result = st_canvas(
         fill_color="rgba(0,0,0,0)",
         stroke_width=3,
@@ -82,23 +80,20 @@ def draw_signature(unique_key):
         width=450,
         drawing_mode="freedraw",
         key=canvas_key,
-        update_streamlit=False    # ← أهم سطر يمنع الريفرش
+        update_streamlit=False     # ← يمنع الـ Refresh
     )
 
-    # إذا فيه صورة جديدة
     if canvas_result.image_data is not None:
-        img = canvas_result.image_data
-        img = cv2.cvtColor(img, cv2.COLOR_RGBA2RGB)
+        img = Image.fromarray(canvas_result.image_data.astype("uint8"), "RGBA")
+        img = img.convert("RGB")
 
-        _, buffer = cv2.imencode(".png", img)
-        img_bytes = buffer.tobytes()
+        buffer = io.BytesIO()
+        img.save(buffer, format="PNG")
+        img_bytes = buffer.getvalue()
 
         b64 = base64.b64encode(img_bytes).decode()
-
-        # نخزن آخر توقيع
         st.session_state[canvas_key] = b64
 
-    # نرجع التوقيع من session_state فقط
     return st.session_state[canvas_key]
 
 
