@@ -9,7 +9,7 @@ from PIL import Image
 from streamlit_drawable_canvas import st_canvas
 import time
 
-# ====== إعدادات الاتصال بجوجل شيت ======
+# ====== الاتصال بجوجل شيت ======
 scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
 creds_dict = st.secrets["gcp_service_account"]
 creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
@@ -17,73 +17,74 @@ client = gspread.authorize(creds)
 
 # ====== أوراق الشيت ======
 SHEET_NAME = "Complaints"
+
 try:
     sheet = client.open(SHEET_NAME)
 except Exception as e:
     st.error(f"❌ خطأ في فتح الشيت: {e}")
     st.stop()
 
+# إنشاء / جلب الورقة
 try:
     complaints_sheet = sheet.worksheet("Complaints")
 except Exception:
-    complaints_sheet = sheet.add_worksheet(title="Complaints", rows="1000", cols="20")
+    complaints_sheet = sheet.add_worksheet(title="Complaints", rows="2000", cols="20")
 
-# ====== دوال مساعدة ======
-def safe_append(sheet, row_data, retries=5, delay=1):
+
+# ====== دوال المزامنة ======
+def safe_append(sheet, row_data, retries=4, delay=1):
     for attempt in range(retries):
         try:
             sheet.append_row(row_data)
             return True
-        except Exception:
+        except:
             time.sleep(delay)
-    st.error("❌ فشل append_row بعد عدة محاولات.")
+    st.error("❌ فشل append_row بعد محاولات.")
     return False
 
-def safe_delete(sheet, row_index, retries=5, delay=1):
+def safe_delete(sheet, row_index, retries=4, delay=1):
     for attempt in range(retries):
         try:
             sheet.delete_rows(row_index)
             return True
-        except Exception:
+        except:
             time.sleep(delay)
-    st.error("❌ فشل delete_rows بعد عدة محاولات.")
+    st.error("❌ فشل delete_rows.")
     return False
+
 
 # ====== دالة رسم التوقيع الإلكتروني ======
 def draw_signature():
     st.subheader("✍️ التوقيع الإلكتروني للمدير")
-    st.write("قم برسم توقيعك داخل المربع أدناه:")
-
     canvas = st_canvas(
-        fill_color="rgba(0, 0, 0, 0)",
+        fill_color="rgba(0,0,0,0)",
         stroke_width=3,
         stroke_color="#000000",
         background_color="#FFFFFF",
         width=500,
         height=200,
         drawing_mode="freedraw",
-        key="canvas_signature",
+        key="admin_sig",
     )
 
     if canvas.image_data is not None:
         img = Image.fromarray(canvas.image_data.astype("uint8"))
-        st.image(img, caption="التوقيع الذي تم رسمه")
-
         buffered = io.BytesIO()
         img.save(buffered, format="PNG")
-        signature_base64 = base64.b64encode(buffered.getvalue()).decode()
+        sig_base64 = base64.b64encode(buffered.getvalue()).decode()
+        st.success("✔ تم إنشاء التوقيع")
+        return sig_base64
 
-        st.success("✔ تم إنشاء التوقيع بنجاح")
-        return signature_base64
     return None
+# ====== واجهة المدير ======
+def run_admin():
 
-# ====== النظام الرئيسي للمدير ======
-def run_admin_system():
     st.title("👑 لوحة تحكم المدير")
 
     # --- تسجيل الدخول ---
-    st.subheader("🔐 تسجيل الدخول كمدير")
+    st.subheader("🔐 تسجيل الدخول")
     password = st.text_input("ادخل كلمة المرور", type="password")
+
     if "admin_password" not in st.session_state:
         st.session_state.admin_password = "1234"  # كلمة مرور افتراضية
 
@@ -95,134 +96,117 @@ def run_admin_system():
         st.error("❌ كلمة المرور غير صحيحة")
         return
 
-    st.success("✔ تم تسجيل الدخول بنجاح")
+    st.success("✔ تم تسجيل الدخول")
     st.write("---")
 
-    # --- اختيار وظيفة المدير ---
     option = st.selectbox("اختر وظيفة:", [
-        "عرض الشكاوى",
-        "اعتماد شكوى",
-        "رفض شكوى",
-        "إدارة كلمات المرور",
+        "الشكاوى المطلوبة اعتماد",
+        "تغيير كلمة المرور",
         "التوقيع الإلكتروني"
     ])
 
-    # ====== عرض الشكاوى ======
-    if option == "عرض الشكاوى":
-        st.header("📋 الشكاوى النشطة")
+    # ---------------------------------------------------------
+    # 1) الشكاوى التي تم الضغط لها على زر (🔵 طلب اعتماد)
+    # ---------------------------------------------------------
+    if option == "الشكاوى المطلوبة اعتماد":
+
+        st.header("🔵 الشكاوى المطلوبة اعتماد")
+
         data = complaints_sheet.get_all_values()
-        if len(data) > 1:
-            for i, row in enumerate(data[1:], start=2):
-                while len(row) < 4:
-                    row.append("")
-                comp_id, comp_type, notes, action = row[:4]
-                st.info(f"🆔 {comp_id} | 📌 {comp_type}")
-                st.write(f"📝 الملاحظات: {notes}")
-                st.write(f"✅ الإجراء: {action}")
-        else:
-            st.info("لا توجد شكاوى حالياً.")
 
-    # ====== اعتماد الشكوى ======
-    elif option == "اعتماد شكوى":
-        st.header("✔ اعتماد شكوى")
-
-        # ====== (التعديل الذي طلبته) ======
-        data = complaints_sheet.get_all_values()[1:]
-
-        pending_list = []
-        for row in data:
-            if len(row) > 3 and row[3].strip() == "":
-                pending_list.append(row[0])
-
-        if len(pending_list) == 0:
-            st.info("لا توجد شكاوى تحتاج اعتماد حالياً")
+        if len(data) <= 1:
+            st.info("لا توجد شكاوى مطلوبة اعتماد حالياً.")
             return
 
-        comp_id = st.selectbox("اختر الشكوى لاعتمادها", pending_list)
-        # ===================================
+        found_any = False
 
-        signature_img = draw_signature()
+        for i, row in enumerate(data[1:], start=2):
 
-        if st.button("اعتماد الشكوى"):
-            if not comp_id:
-                st.error("⚠️ اختر رقم الشكوى")
-            elif signature_img is None:
-                st.error("⚠️ يجب رسم التوقيع أولاً")
-            else:
-                data = complaints_sheet.get_all_values()
-                found = False
-                for i, row in enumerate(data[1:], start=2):
-                    if row[0] == comp_id:
-                        updated_row = row[:]
-                        updated_row.append(
-                            f"✔ تم اعتمادها بواسطة المدير {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-                        )
-                        updated_row.append(signature_img)
+            # التأكد من وجود عمود الإجراء
+            while len(row) < 4:
+                row.append("")
+
+            comp_id = row[0]
+            comp_type = row[1]
+            notes = row[2]
+            action = row[3]
+
+            # نعرض فقط الشكاوى التي كتب فيها (🔵 بانتظار اعتماد المدير)
+            if action.strip() == "🔵 بانتظار اعتماد المدير":
+                found_any = True
+
+                with st.expander(f"🆔 {comp_id} | 📌 {comp_type}"):
+
+                    st.write(f"📝 الملاحظات: {notes}")
+                    st.warning("🔵 هذه الشكوى بانتظار الاعتماد")
+
+                    signature_img = draw_signature()
+
+                    if st.button(f"✔ اعتماد الشكوى {comp_id}"):
+
+                        if not signature_img:
+                            st.error("⚠ يجب رسم التوقيع أولاً.")
+                            st.stop()
+
+                        # إعادة كتابة السطر مع حفظ التوقيع
+                        updated_row = [
+                            comp_id,
+                            comp_type,
+                            notes,
+                            "✔ تم اعتماد المدير",
+                            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            "", "", "", signature_img
+                        ]
+
                         safe_append(complaints_sheet, updated_row)
                         safe_delete(complaints_sheet, i)
-                        found = True
-                        break
 
-                if found:
-                    st.success(f"✅ تم اعتماد الشكوى {comp_id}")
-                else:
-                    st.error("⚠️ لم يتم العثور على الشكوى")
-                return
+                        st.success(f"✔ تم اعتماد الشكوى {comp_id}")
+                        st.stop()
 
-    # ====== رفض الشكوى ======
-    elif option == "رفض شكوى":
-        st.header("❌ رفض شكوى")
-        comp_id = st.text_input("أدخل رقم الشكوى لرفضها")
-        signature_img = draw_signature()
-        if st.button("رفض الشكوى"):
-            if not comp_id:
-                st.error("⚠️ ادخل رقم الشكوى")
-            elif signature_img is None:
-                st.error("⚠️ يجب رسم التوقيع أولاً")
-            else:
-                data = complaints_sheet.get_all_values()
-                found = False
-                for i, row in enumerate(data[1:], start=2):
-                    if row[0] == comp_id:
-                        updated_row = row[:]
-                        updated_row.append(
-                            f"❌ تم رفضها بواسطة المدير {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-                        )
-                        updated_row.append(signature_img)
-                        safe_append(complaints_sheet, updated_row)
-                        safe_delete(complaints_sheet, i)
-                        found = True
-                        break
+        if not found_any:
+            st.info("لا توجد شكاوى عليها طلب اعتماد.")
+    # ---------------------------------------------------------
+    # 2) تغيير كلمة المرور
+    # ---------------------------------------------------------
+    if option == "تغيير كلمة المرور":
 
-                if found:
-                    st.success(f"❌ تم رفض الشكوى {comp_id}")
-                else:
-                    st.error("⚠️ لم يتم العثور على الشكوى")
-                return
+        st.header("🔑 تغيير كلمة المرور")
 
-    # ====== إدارة كلمة المرور ======
-    elif option == "إدارة كلمات المرور":
-        st.header("🔑 إدارة كلمة المرور")
         current_pw = st.text_input("كلمة المرور الحالية", type="password")
         new_pw = st.text_input("كلمة المرور الجديدة", type="password")
         confirm_pw = st.text_input("تأكيد كلمة المرور الجديدة", type="password")
-        if st.button("تغيير كلمة المرور"):
+
+        if st.button("💾 تغيير"):
+
             if current_pw != st.session_state.admin_password:
-                st.error("⚠ كلمة المرور الحالية غير صحيحة")
+                st.error("❌ كلمة المرور الحالية غير صحيحة")
+
             elif new_pw != confirm_pw:
-                st.error("⚠ كلمة المرور الجديدة لا تتطابق")
+                st.error("⚠ كلمة المرور الجديدة غير متطابقة")
+
+            elif new_pw.strip() == "":
+                st.error("⚠ لا يمكن ترك كلمة المرور فارغة")
+
             else:
                 st.session_state.admin_password = new_pw
-                st.success("✔ تم تغيير كلمة المرور")
+                st.success("✔ تم تغيير كلمة المرور بنجاح")
 
-    # ====== التوقيع الإلكتروني ======
-    elif option == "التوقيع الإلكتروني":
-        st.header("✍️ توقيع المدير")
+
+    # ---------------------------------------------------------
+    # 3) التوقيع الإلكتروني (عرض التوقيع فقط)
+    # ---------------------------------------------------------
+    if option == "التوقيع الإلكتروني":
+
+        st.header("✍️ إنشاء / اختبار التوقيع الإلكتروني")
+
+        st.write("يمكنك رسم توقيعك بالأسفل وسيتم تحويله مباشرة إلى Base64")
+
         signature_img = draw_signature()
+
         if signature_img:
             st.code(signature_img)
-            st.info("انسخ هذا الكود إذا أردت حفظه.")
-
+            st.info("✔ هذا هو التوقيع بصيغة Base64، يتم استخدامه عند اعتماد الشكاوى.")
 # ====== تشغيل النظام ======
 if __name__ == "__main__":
-    run_admin_system()
+    run_admin()
