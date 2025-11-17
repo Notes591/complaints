@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 import streamlit as st
 import gspread
-import base64
 from oauth2client.service_account import ServiceAccountCredentials
+import base64
 from datetime import datetime
 import time
 from streamlit_drawable_canvas import st_canvas
@@ -10,9 +10,9 @@ from PIL import Image
 import io
 
 
-# =====================================================
-#         الاتصال بجوجل شيت
-# =====================================================
+# =======================================
+#   Google Sheet اتصال
+# =======================================
 scope = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive"
@@ -22,56 +22,27 @@ creds_dict = st.secrets["gcp_service_account"]
 creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
 client = gspread.authorize(creds)
 
-SHEET_NAME = "Complaints"
-
+sheet = client.open("Complaints")
 try:
-    sheet = client.open(SHEET_NAME)
-except Exception as e:
-    st.error(f"❌ خطأ في فتح الشيت: {e}")
-    st.stop()
-
-try:
-    complaints_sheet = sheet.worksheet("Complaints")
-except Exception:
-    complaints_sheet = sheet.add_worksheet(title="Complaints", rows="2000", cols="20")
+    complaints = sheet.worksheet("Complaints")
+except:
+    complaints = sheet.add_worksheet("Complaints", rows="2000", cols="20")
 
 
+# =======================================
+#   دالة توقيع بسيطة وثابتة
+# =======================================
+def signature_pad(key_id):
 
-# =====================================================
-#     دوال آمنة للشيت
-# =====================================================
-def safe_append(sheet, values):
-    for _ in range(5):
-        try:
-            sheet.append_row(values)
-            return True
-        except:
-            time.sleep(1)
-    return False
-
-def safe_delete(sheet, index):
-    for _ in range(5):
-        try:
-            sheet.delete_rows(index)
-            return True
-        except:
-            time.sleep(1)
-    return False
-
-
-
-# =====================================================
-#   دالة التوقيع — بدون Refresh — بدون cv2
-# =====================================================
-def draw_signature(unique_key):
     st.subheader("✍️ التوقيع الإلكتروني")
 
-    canvas_key = f"canvas_{unique_key}"
+    if "sig" not in st.session_state:
+        st.session_state.sig = {}
 
-    if canvas_key not in st.session_state:
-        st.session_state[canvas_key] = None
+    if key_id not in st.session_state.sig:
+        st.session_state.sig[key_id] = None
 
-    canvas_result = st_canvas(
+    result = st_canvas(
         fill_color="rgba(0,0,0,0)",
         stroke_width=3,
         stroke_color="#000000",
@@ -79,189 +50,81 @@ def draw_signature(unique_key):
         height=200,
         width=450,
         drawing_mode="freedraw",
-        key=canvas_key,
-        update_streamlit=False     # ← يمنع الـ Refresh
+        key=f"canvas_{key_id}",
+        update_streamlit=False              # ← يمنع الريفرش
     )
 
-    if canvas_result.image_data is not None:
-        img = Image.fromarray(canvas_result.image_data.astype("uint8"), "RGBA")
+    if result.image_data is not None:
+        img = Image.fromarray(result.image_data.astype("uint8"), "RGBA")
         img = img.convert("RGB")
-
         buffer = io.BytesIO()
         img.save(buffer, format="PNG")
-        img_bytes = buffer.getvalue()
+        st.session_state.sig[key_id] = base64.b64encode(buffer.getvalue()).decode()
 
-        b64 = base64.b64encode(img_bytes).decode()
-        st.session_state[canvas_key] = b64
-
-    return st.session_state[canvas_key]
+    return st.session_state.sig[key_id]
 
 
-
-
-# =====================================================
-#                واجهة المدير
-# =====================================================
-def run_admin():
+# =======================================
+#     لوحة تحكم المدير
+# =======================================
+def run():
 
     st.title("👑 لوحة تحكم المدير")
 
-    # ---- تسجيل الدخول ----
-    with st.form("login_form", clear_on_submit=False):
-        st.subheader("🔐 تسجيل الدخول")
-        password = st.text_input("ادخل كلمة المرور", type="password")
-        login = st.form_submit_button("دخول")
-
-    if login:
-        if "admin_password" not in st.session_state:
-            st.session_state.admin_password = "1234"
-
-        if password != st.session_state.admin_password:
-            st.error("❌ كلمة المرور غير صحيحة")
-            st.stop()
-        else:
-            st.session_state["logged_in"] = True
-
-    if "logged_in" not in st.session_state:
-        st.info("من فضلك سجل الدخول.")
-        return
+    # تسجيل الدخول
+    pw = st.text_input("كلمة المرور:", type="password")
+    if pw != "1234":
+        st.stop()
 
     st.success("✔ تم تسجيل الدخول")
     st.write("---")
 
+    st.header("🔵 الشكاوى المطلوب اعتمادها")
 
-    option = st.selectbox("اختر وظيفة:", [
-        "🔵 الشكاوى المطلوب اعتمادها",
-        "🔑 تغيير كلمة المرور",
-        "✍️ تجربة التوقيع"
-    ])
+    data = complaints.get_all_values()
+    if len(data) <= 1:
+        st.info("لا توجد شكاوى مطلوبة اعتماد.")
+        st.stop()
 
+    for i, row in enumerate(data[1:], start=2):
 
+        if len(row) < 9:
+            row += [""] * (9 - len(row))
 
-    # =====================================================
-    #  (1) الشكاوى المطلوب اعتمادها
-    # =====================================================
-    if option == "🔵 الشكاوى المطلوب اعتمادها":
+        comp_id, comp_type, notes, status = row[0], row[1], row[2], row[3]
 
-        st.header("🔵 الشكاوى المطلوب اعتمادها")
+        if status != "🔵 بانتظار اعتماد المدير":
+            continue
 
-        try:
-            data = complaints_sheet.get_all_values()
-        except:
-            st.error("❌ لا يمكن تحميل البيانات")
-            return
+        with st.expander(f"🆔 {comp_id} | {comp_type}"):
 
-        if len(data) <= 1:
-            st.info("لا توجد شكاوى مطلوبة اعتماد.")
-            return
+            st.write(f"📝 الملاحظات: {notes}")
+            st.warning("🔵 هذه الشكوى بانتظار الاعتماد")
 
-        pending = []
+            sig = signature_pad(comp_id)
 
-        for i, row in enumerate(data[1:], start=2):
-            while len(row) < 9:
-                row.append("")
-            if row[3].strip() == "🔵 بانتظار اعتماد المدير":
-                pending.append((i, row))
+            if st.button(f"✔ اعتماد الشكوى {comp_id}", key=f"appr_{comp_id}"):
 
-        if not pending:
-            st.info("لا توجد شكاوى عليها طلب اعتماد.")
-            return
+                if not sig:
+                    st.error("⚠ يجب رسم التوقيع")
+                    st.stop()
 
+                new_row = [
+                    comp_id,
+                    comp_type,
+                    notes,
+                    "✔ تم اعتماد المدير",
+                    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "",
+                    row[6], row[7],
+                    sig
+                ]
 
-        for row_index, row in pending:
-
-            comp_id  = row[0]
-            comp_type = row[1]
-            notes = row[2]
-            outbound = row[6]
-            inbound = row[7]
-
-            with st.expander(f"🆔 {comp_id} | 📌 {comp_type}"):
-
-                st.write(f"📝 الملاحظات: {notes}")
-                st.warning("🔵 هذه الشكوى بانتظار الاعتماد")
-
-                st.write("✍️ **ارسم التوقيع:**")
-
-                signature = draw_signature(comp_id)
-
-                with st.form(f"approve_form_{comp_id}"):
-                    submit = st.form_submit_button(f"✔ اعتماد الشكوى {comp_id}")
-
-                    if submit:
-                        if not signature:
-                            st.error("⚠ يجب رسم التوقيع.")
-                            st.stop()
-
-                        updated_row = [
-                            comp_id,
-                            comp_type,
-                            notes,
-                            "✔ تم اعتماد المدير",
-                            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                            "",
-                            outbound,
-                            inbound,
-                            signature
-                        ]
-
-                        safe_append(complaints_sheet, updated_row)
-                        safe_delete(complaints_sheet, row_index)
-
-                        st.success(f"✔ تم اعتماد الشكوى {comp_id}")
-                        st.experimental_rerun()
+                complaints.append_row(new_row)
+                complaints.delete_rows(i)
+                st.success("✔ تم الاعتماد")
+                st.experimental_rerun()
 
 
-
-    # =====================================================
-    #  (2) تغيير كلمة المرور
-    # =====================================================
-    if option == "🔑 تغيير كلمة المرور":
-
-        st.header("🔑 تغيير كلمة المرور")
-
-        with st.form("pw_form"):
-            current_pw = st.text_input("كلمة المرور الحالية", type="password")
-            new_pw = st.text_input("كلمة المرور الجديدة", type="password")
-            confirm_pw = st.text_input("تأكيد كلمة المرور الجديدة", type="password")
-
-            save = st.form_submit_button("💾 حفظ كلمة المرور")
-
-            if save:
-
-                if current_pw != st.session_state.admin_password:
-                    st.error("❌ كلمة المرور الحالية غير صحيحة")
-
-                elif new_pw != confirm_pw:
-                    st.error("⚠ كلمة المرور الجديدة غير متطابقة")
-
-                elif new_pw.strip() == "":
-                    st.error("⚠ كلمة المرور لا يمكن أن تكون فارغة")
-
-                else:
-                    st.session_state.admin_password = new_pw
-                    st.success("✔ تم تغيير كلمة المرور بنجاح")
-
-
-
-    # =====================================================
-    #  (3) تجربة التوقيع
-    # =====================================================
-    if option == "✍️ تجربة التوقيع":
-
-        st.header("✍️ تجربة التوقيع")
-
-        sig = draw_signature("preview")
-
-        if sig:
-            st.success("✔ تم التقاط التوقيع!")
-            st.image(base64.b64decode(sig))
-            st.code(sig)
-
-
-
-# =====================================================
-# تشغيل النظام
-# =====================================================
 if __name__ == "__main__":
-    run_admin()
+    run()
