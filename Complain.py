@@ -633,7 +633,7 @@ st.markdown("---")
 st.header("📦 أرشيف أرامكس:")
 aramex_archived = aramex_archive.get_all_values()
 
-if len(aramex_archived) > 1:
+if len(aramex_archived) > 1):
 
     for i, row in enumerate(aramex_archived[1:], start=2):
 
