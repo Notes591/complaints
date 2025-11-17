@@ -3,9 +3,9 @@ import streamlit as st
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
-import io, base64, time
-from PIL import Image
-from streamlit_drawable_canvas import st_canvas
+import time
+from streamlit_signature_pad import st_signature_pad
+
 
 # ====== الاتصال بجوجل شيت ======
 scope = [
@@ -31,7 +31,7 @@ except Exception:
     complaints_sheet = sheet.add_worksheet(title="Complaints", rows="2000", cols="20")
 
 
-# ===== دوال Retry =====
+# ====== دوال Retry ======
 def safe_update(sheet, cell, value):
     for _ in range(5):
         try:
@@ -41,6 +41,7 @@ def safe_update(sheet, cell, value):
             time.sleep(1)
     return False
 
+
 def safe_delete(sheet, index):
     for _ in range(5):
         try:
@@ -49,6 +50,7 @@ def safe_delete(sheet, index):
         except:
             time.sleep(1)
     return False
+
 
 def safe_append(sheet, values):
     for _ in range(5):
@@ -60,32 +62,27 @@ def safe_append(sheet, values):
     return False
 
 
-# ===== دالة التوقيع — مفتاح ثابت لكل شكوى =====
+# ===== التوقيع الإلكتروني باستخدام streamlit-signature-pad =====
 def draw_signature(unique_key):
     st.subheader("✍️ التوقيع الإلكتروني")
 
-    canvas = st_canvas(
-        fill_color="rgba(0,0,0,0)",
-        stroke_width=3,
-        stroke_color="#000000",
-        background_color="#FFFFFF",
-        width=450,
+    signature_data = st_signature_pad(
+        key=f"sig_{unique_key}",
         height=200,
-        drawing_mode="freedraw",
-        key=f"sigpad_{unique_key}",  # ← مفتاح ثابت يمنع اختفاء التوقيع
+        pen_color="black",
+        background_color="white"
     )
 
-    if canvas.image_data is not None:
-        img = Image.fromarray(canvas.image_data.astype("uint8"))
-        buffer = io.BytesIO()
-        img.save(buffer, format="PNG")
-        return base64.b64encode(buffer.getvalue()).decode()
+    if signature_data:
+        # signature_data = "data:image/png;base64,xxxxxx"
+        sig_b64 = signature_data.split(",")[1]   # إزالة header
+        return sig_b64
 
     return None
 
 
 
-# ===== واجهة المدير =====
+# ========== واجهة المدير ==========
 def run_admin():
 
     st.title("👑 لوحة تحكم المدير")
@@ -115,13 +112,13 @@ def run_admin():
     ])
 
     # -----------------------------------------------------------
-    # (1) الشكاوى المطلوب اعتمادها — قراءة واحدة فقط للشيت
+    # (1) الشكاوى المطلوب اعتمادها
     # -----------------------------------------------------------
     if option == "🔵 الشكاوى المطلوب اعتمادها":
 
         st.header("🔵 الشكاوى المطلوب اعتمادها")
 
-        # ❗ قراءة واحدة للشيت — لتجنب 429
+        # قراءة الشيت مرة واحدة فقط
         try:
             data = complaints_sheet.get_all_values()
         except Exception:
@@ -132,7 +129,6 @@ def run_admin():
             st.info("لا توجد شكاوى مطلوبة اعتماد.")
             return
 
-        # تصفية الشكاوى المطلوبة اعتماد
         pending = []
         for i, row in enumerate(data[1:], start=2):
             while len(row) < 9:
@@ -145,7 +141,7 @@ def run_admin():
             st.info("لا توجد شكاوى عليها طلب اعتماد.")
             return
 
-        # عرض الشكاوى المطلوبة اعتماد
+        # عرض كل شكوى مطلوبة اعتماد
         for row_index, row in pending:
 
             comp_id = row[0]
@@ -159,8 +155,8 @@ def run_admin():
                 st.write(f"📝 الملاحظات: {notes}")
                 st.warning("🔵 هذه الشكوى بانتظار الاعتماد")
 
-                st.write("✍️ **ارسم التوقيع:**")
-                signature = draw_signature(comp_id)  # ← مفتاح ثابت يمنع الاختفاء
+                st.write("✍️ **ارسم التوقيع بالأسفل:**")
+                signature = draw_signature(comp_id)
 
                 if st.button(f"✔ اعتماد الشكوى {comp_id}", key=f"approve_{comp_id}"):
 
@@ -205,7 +201,7 @@ def run_admin():
                 st.error("❌ كلمة المرور الحالية غير صحيحة")
 
             elif new_pw != confirm_pw:
-                st.error("⚠ كلمة المرور الجديدة غير متطابقة")
+                st.error("⚠ كلمة المرور لا تتطابق")
 
             elif new_pw.strip() == "":
                 st.error("⚠ كلمة المرور لا يمكن أن تكون فارغة")
@@ -215,20 +211,19 @@ def run_admin():
                 st.success("✔ تم تغيير كلمة المرور بنجاح")
 
 
+
     # -----------------------------------------------------------
-    # (3) صفحة توقيع إلكتروني للتجربة فقط
+    # (3) صفحة التجربة (لا يتم حفظ التوقيع)
     # -----------------------------------------------------------
     if option == "✍️ التوقيع الإلكتروني":
 
         st.header("✍️ تجربة التوقيع الإلكتروني")
 
-        st.write("هذه صفحة لاختبار رسم التوقيع فقط — لا يتم حفظ أي شيء هنا.")
-
         signature_preview = draw_signature("preview")
 
         if signature_preview:
             st.success("✔ تم إنشاء التوقيع")
-            st.code(signature_preview, language="text")
+            st.code(signature_preview)
 
 
 
