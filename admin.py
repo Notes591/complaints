@@ -1,13 +1,9 @@
 # -*- coding: utf-8 -*-
 import streamlit as st
 import gspread
-import base64
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
 import time
-from streamlit_drawable_canvas import st_canvas
-from PIL import Image
-import io
 
 
 # =====================================================
@@ -61,47 +57,14 @@ def safe_delete(sheet, index):
 
 
 # =====================================================
-#   دالة التوقيع — بدون session_state
-# =====================================================
-def get_signature_from_canvas(key):
-    st.subheader("✍️ التوقيع الإلكتروني")
-
-    canvas_result = st_canvas(
-        fill_color="rgba(0,0,0,0)",
-        stroke_width=3,
-        stroke_color="#000000",
-        background_color="#FFFFFF",
-        height=200,
-        width=450,
-        drawing_mode="freedraw",
-        key=key,
-        update_streamlit=False
-    )
-
-    if canvas_result.image_data is None:
-        return None
-
-    # تحويل الرسمة إلى Base64
-    img = Image.fromarray(canvas_result.image_data.astype("uint8"), "RGBA")
-    img = img.convert("RGB")
-
-    buffer = io.BytesIO()
-    img.save(buffer, format="PNG")
-    img_bytes = buffer.getvalue()
-
-    return base64.b64encode(img_bytes).decode()
-
-
-
-
-# =====================================================
-#                واجهة المدير
+#                لوحة المدير
 # =====================================================
 def run_admin():
 
     st.title("👑 لوحة تحكم المدير")
 
     # ---- تسجيل الدخول ----
+    st.subheader("🔐 تسجيل الدخول")
     password = st.text_input("ادخل كلمة المرور", type="password")
 
     if "admin_password" not in st.session_state:
@@ -118,17 +81,13 @@ def run_admin():
     st.success("✔ تم تسجيل الدخول")
     st.write("---")
 
-
     option = st.selectbox("اختر وظيفة:", [
         "🔵 الشكاوى المطلوب اعتمادها",
-        "🔑 تغيير كلمة المرور",
-        "✍️ تجربة التوقيع"
+        "🔑 تغيير كلمة المرور"
     ])
 
-
-
     # =====================================================
-    #  (1) عرض الشكاوى المطلوبة للاعتماد
+    #  (1) الشكاوى المطلوب اعتمادها
     # =====================================================
     if option == "🔵 الشكاوى المطلوب اعتمادها":
 
@@ -170,14 +129,7 @@ def run_admin():
                 st.write(f"📝 الملاحظات: {notes}")
                 st.warning("🔵 هذه الشكوى بانتظار الاعتماد")
 
-                # ← لا تسجيل للتوقيع هنا
-                signature_b64 = get_signature_from_canvas(f"sign_{comp_id}")
-
-                if st.button(f"✔ اعتماد الشكوى {comp_id}", key=f"btn_{comp_id}"):
-
-                    if not signature_b64:
-                        st.error("⚠ يجب رسم التوقيع أولاً.")
-                        st.stop()
+                if st.button(f"✔ اعتماد الشكوى {comp_id}", key=f"approve_{comp_id}"):
 
                     updated_row = [
                         comp_id,
@@ -188,7 +140,7 @@ def run_admin():
                         "",
                         outbound,
                         inbound,
-                        signature_b64
+                        "—"   # بدون توقيع
                     ]
 
                     safe_append(complaints_sheet, updated_row)
@@ -216,7 +168,7 @@ def run_admin():
                 st.error("❌ كلمة المرور الحالية غير صحيحة")
 
             elif new_pw != confirm_pw:
-                st.error("⚠ كلمة المرور غير متطابقة")
+                st.error("⚠ كلمة المرور الجديدة غير متطابقة")
 
             elif new_pw.strip() == "":
                 st.error("⚠ كلمة المرور لا يمكن أن تكون فارغة")
@@ -224,21 +176,6 @@ def run_admin():
             else:
                 st.session_state.admin_password = new_pw
                 st.success("✔ تم تغيير كلمة المرور بنجاح")
-
-
-
-    # =====================================================
-    #  (3) صفحة تجربة التوقيع
-    # =====================================================
-    if option == "✍️ تجربة التوقيع":
-
-        st.header("✍️ تجربة التوقيع")
-
-        sig = get_signature_from_canvas("preview")
-
-        if sig:
-            st.image(base64.b64decode(sig))
-            st.success("✔ تم التقاط التوقيع")
 
 
 
