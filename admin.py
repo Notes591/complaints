@@ -1,116 +1,15 @@
 # -*- coding: utf-8 -*-
 import streamlit as st
 import gspread
+import base64
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
 import time
-import streamlit.components.v1 as components
-
-# -------------------------------
-#   استدعاء مكتبة JS Eval
-# -------------------------------
-try:
-    from streamlit_js_eval import streamlit_js_eval
-except:
-    st.error("❗ مكتبة streamlit-js-eval غير منصبة. أضِف السطر التالي للـ requirements.txt:\nstreamlit-js-eval")
-    st.stop()
+from streamlit_drawable_canvas import st_canvas
 
 
 # =====================================================
-#    دالة التوقيع الإلكتروني (Canvas + JS Eval)
-# =====================================================
-def draw_signature(unique_key):
-    st.subheader("✍️ التوقيع الإلكتروني")
-
-    canvas_id = f"canvas_{unique_key}"
-    js_key = f"sig_store_{unique_key}"
-
-    # ---- منطقة الرسم HTML + JS ----
-    html_code = f"""
-    <style>
-        #{canvas_id} {{
-            border: 2px solid black;
-            border-radius: 5px;
-            touch-action: none;
-        }}
-    </style>
-
-    <canvas id="{canvas_id}" width="450" height="200"></canvas><br>
-
-    <button onclick="clearCanvas()">مسح</button>
-    <button onclick="saveSignature()">حفظ</button>
-
-    <script>
-
-        let canvas = document.getElementById("{canvas_id}");
-        let ctx = canvas.getContext("2d");
-        let drawing = false;
-
-        canvas.addEventListener("mousedown", () => drawing = true);
-        canvas.addEventListener("mouseup", () => drawing = false);
-        canvas.addEventListener("mouseout", () => drawing = false);
-
-        canvas.addEventListener("mousemove", function(e) {{
-            if (!drawing) return;
-
-            let rect = canvas.getBoundingClientRect();
-            ctx.lineWidth = 3;
-            ctx.lineCap = "round";
-            ctx.strokeStyle = "black";
-
-            ctx.lineTo(e.clientX - rect.left, e.clientY - rect.top);
-            ctx.stroke();
-            ctx.beginPath();
-            ctx.moveTo(e.clientX - rect.left, e.clientY - rect.top);
-        }});
-
-        function clearCanvas() {{
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-        }}
-
-        function saveSignature() {{
-            const dataUrl = canvas.toDataURL("image/png"); 
-            window.parent.postMessage(
-                {{
-                    "signatureData": dataUrl,
-                    "sigKey": "{js_key}"
-                }},
-                "*"
-            );
-        }}
-
-    </script>
-    """
-
-    # نعرض الكانفاس
-    components.html(html_code, height=320)
-
-    # نلتقط الإشارة باستخدام streamlit_js_eval
-    result = streamlit_js_eval(
-        js_expressions="""
-            new Promise(resolve=>{
-                window.addEventListener("message",(event)=>{
-                    if(event.data && event.data.sigKey === '""" + js_key + """'){
-                        resolve(event.data.signatureData);
-                    }
-                })
-            })
-        """,
-        key=js_key
-    )
-
-    # إذا وصل التوقيع → نخزن Base64 فقط
-    if result and "base64" in result:
-        return result.split(",")[1]
-
-    return None
-
-
-
-
-
-# =====================================================
-#        الاتصال بجوجل شيت
+#         الاتصال بجوجل شيت
 # =====================================================
 scope = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -137,7 +36,7 @@ except Exception:
 
 
 # =====================================================
-#              دوال retry للشيت
+#           دوال آمنة للشيت
 # =====================================================
 def safe_append(sheet, values):
     for _ in range(5):
@@ -147,7 +46,6 @@ def safe_append(sheet, values):
         except:
             time.sleep(1)
     return False
-
 
 def safe_delete(sheet, index):
     for _ in range(5):
@@ -160,10 +58,45 @@ def safe_delete(sheet, index):
 
 
 
+# =====================================================
+#       دالة التوقيع الإلكتروني — Drawable Canvas
+# =====================================================
+def draw_signature(unique_key):
+    st.subheader("✍️ التوقيع الإلكتروني")
+
+    # Random key لكل Canvas
+    key = f"canvas_{unique_key}_{time.time()}"
+
+    canvas_result = st_canvas(
+        fill_color="rgba(0,0,0,0)",     # خلفية شفافة
+        stroke_width=3,
+        stroke_color="#000000",
+        background_color="#FFFFFF",
+        height=200,
+        width=450,
+        drawing_mode="freedraw",
+        key=key,
+    )
+
+    if canvas_result.image_data is not None:
+        import cv2
+        import numpy as np
+
+        img = canvas_result.image_data
+        img = cv2.cvtColor(img, cv2.COLOR_RGBA2RGB)
+
+        _, buffer = cv2.imencode(".png", img)
+        img_bytes = buffer.tobytes()
+
+        b64 = base64.b64encode(img_bytes).decode()
+        return b64
+
+    return None
+
 
 
 # =====================================================
-#                واجهة المدير
+#                   واجهة المدير
 # =====================================================
 def run_admin():
 
@@ -187,27 +120,25 @@ def run_admin():
     st.success("✔ تم تسجيل الدخول")
     st.write("---")
 
-
-    # قائمة وظائف المدير
     option = st.selectbox("اختر وظيفة:", [
         "🔵 الشكاوى المطلوب اعتمادها",
         "🔑 تغيير كلمة المرور",
-        "✍️ التوقيع الإلكتروني"
+        "✍️ تجربة التوقيع"
     ])
 
 
 
     # =====================================================
-    #      (1) الشكاوى المطلوبة اعتمادها
+    #     (1) الشكاوى المطلوب اعتمادها
     # =====================================================
     if option == "🔵 الشكاوى المطلوب اعتمادها":
 
-        st.header("🔵 الشكاوى المطلوبة اعتمادها")
+        st.header("🔵 الشكاوى المطلوب اعتمادها")
 
         try:
             data = complaints_sheet.get_all_values()
-        except Exception:
-            st.error("❌ فشل في تحميل البيانات من الشيت")
+        except:
+            st.error("❌ لا يمكن تحميل البيانات")
             return
 
         if len(data) <= 1:
@@ -219,7 +150,6 @@ def run_admin():
         for i, row in enumerate(data[1:], start=2):
             while len(row) < 9:
                 row.append("")
-
             if row[3].strip() == "🔵 بانتظار اعتماد المدير":
                 pending.append((i, row))
 
@@ -230,7 +160,7 @@ def run_admin():
 
         for row_index, row in pending:
 
-            comp_id = row[0]
+            comp_id  = row[0]
             comp_type = row[1]
             notes = row[2]
             outbound = row[6]
@@ -241,13 +171,14 @@ def run_admin():
                 st.write(f"📝 الملاحظات: {notes}")
                 st.warning("🔵 هذه الشكوى بانتظار الاعتماد")
 
-                st.write("✍️ **ارسم التوقيع ثم اضغط حفظ:**")
+                st.write("✍️ **ارسم التوقيع:**")
+
                 signature = draw_signature(comp_id)
 
                 if st.button(f"✔ اعتماد الشكوى {comp_id}", key=f"approve_{comp_id}"):
 
                     if not signature:
-                        st.error("⚠ يجب رسم التوقيع ثم الضغط على حفظ")
+                        st.error("⚠ يجب رسم التوقيع.")
                         st.stop()
 
                     updated_row = [
@@ -287,7 +218,7 @@ def run_admin():
                 st.error("❌ كلمة المرور الحالية غير صحيحة")
 
             elif new_pw != confirm_pw:
-                st.error("⚠ كلمة المرور الجديدة غير متطابقة")
+                st.error("⚠ كلمة المرور غير متطابقة")
 
             elif new_pw.strip() == "":
                 st.error("⚠ كلمة المرور لا يمكن أن تكون فارغة")
@@ -299,21 +230,23 @@ def run_admin():
 
 
     # =====================================================
-    #      (3) تجربة التوقيع
+    #         (3) صفحة تجربة التوقيع
     # =====================================================
-    if option == "✍️ التوقيع الإلكتروني":
+    if option == "✍️ تجربة التوقيع":
 
-        st.header("✍️ تجربة رسم التوقيع")
+        st.header("✍️ تجربة التوقيع")
 
-        sig_test = draw_signature("preview")
-        if sig_test:
-            st.success("✔ تم استقبال التوقيع!")
-            st.code(sig_test)
+        sig = draw_signature("preview")
+
+        if sig:
+            st.success("✔ تم التقاط التوقيع!")
+            st.image(base64.b64decode(sig))
+            st.code(sig)
 
 
 
 # =====================================================
-#                    تشغيل النظام
+#                   تشغيل النظام
 # =====================================================
 if __name__ == "__main__":
     run_admin()
