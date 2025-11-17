@@ -6,41 +6,26 @@ from datetime import datetime
 import time
 import streamlit.components.v1 as components
 
-
-# =====================================================
-#             جافاسكربت listener لاستقبال التوقيع
-# =====================================================
-if "js_listener_added" not in st.session_state:
-    st.session_state.js_listener_added = True
-
-    components.html("""
-    <script>
-    window.addEventListener("message", (event) => {
-        if (event.data.type === "save_sig") {
-            const key = event.data.key;
-            const data = event.data.data;
-            const input = window.parent.document.querySelector(`input[id='${key}']`);
-
-            if (input) {
-                input.value = data.split(",")[1];     // Base64 بدون header
-                input.dispatchEvent(new Event('input', { bubbles: true }));
-            }
-        }
-    });
-    </script>
-    """, height=0)
-
+# -------------------------------
+#   استدعاء مكتبة JS Eval
+# -------------------------------
+try:
+    from streamlit_js_eval import streamlit_js_eval
+except:
+    st.error("❗ مكتبة streamlit-js-eval غير منصبة. أضِف السطر التالي للـ requirements.txt:\nstreamlit-js-eval")
+    st.stop()
 
 
 # =====================================================
-#       دالة التوقيع الإلكتروني (HTML + JS)
+#    دالة التوقيع الإلكتروني (Canvas + JS Eval)
 # =====================================================
 def draw_signature(unique_key):
     st.subheader("✍️ التوقيع الإلكتروني")
 
     canvas_id = f"canvas_{unique_key}"
-    hidden_id = f"hidden_{unique_key}"
+    js_key = f"sig_store_{unique_key}"
 
+    # ---- منطقة الرسم HTML + JS ----
     html_code = f"""
     <style>
         #{canvas_id} {{
@@ -84,29 +69,48 @@ def draw_signature(unique_key):
         }}
 
         function saveSignature() {{
-            const dataUrl = canvas.toDataURL("image/png");
-            window.parent.postMessage({{
-                "type": "save_sig",
-                "key": "{hidden_id}",
-                "data": dataUrl
-            }}, "*");
+            const dataUrl = canvas.toDataURL("image/png"); 
+            window.parent.postMessage(
+                {{
+                    "signatureData": dataUrl,
+                    "sigKey": "{js_key}"
+                }},
+                "*"
+            );
         }}
 
     </script>
-    <input type="hidden" id="{hidden_id}">
     """
 
-    st.components.v1.html(html_code, height=320)
+    # نعرض الكانفاس
+    components.html(html_code, height=320)
 
-    # استقبال التوقيع من JS
-    signature_b64 = st.text_input("", key=hidden_id, label_visibility="collapsed")
+    # نلتقط الإشارة باستخدام streamlit_js_eval
+    result = streamlit_js_eval(
+        js_expressions="""
+            new Promise(resolve=>{
+                window.addEventListener("message",(event)=>{
+                    if(event.data && event.data.sigKey === '""" + js_key + """'){
+                        resolve(event.data.signatureData);
+                    }
+                })
+            })
+        """,
+        key=js_key
+    )
 
-    return signature_b64 if signature_b64 else None
+    # إذا وصل التوقيع → نخزن Base64 فقط
+    if result and "base64" in result:
+        return result.split(",")[1]
+
+    return None
+
+
 
 
 
 # =====================================================
-#                 الاتصال بجوجل شيت
+#        الاتصال بجوجل شيت
 # =====================================================
 scope = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -159,7 +163,7 @@ def safe_delete(sheet, index):
 
 
 # =====================================================
-#                واجهة المدير الرئيسية
+#                واجهة المدير
 # =====================================================
 def run_admin():
 

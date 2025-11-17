@@ -9,5 +9,6 @@ fpdf
 streamlit-drawable-canvas
 Pillow
 requests
+streamlit-js-eval
 
 
