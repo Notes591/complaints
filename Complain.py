@@ -1,193 +1,170 @@
 # -*- coding: utf-8 -*-
 import streamlit as st
-import pyodbc
 import pandas as pd
-import requests
-import json
-import xml.etree.ElementTree as ET
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 
-# ======================
-# إعداد الصفحة
-# ======================
-st.set_page_config(page_title="نظام الشحن Aramex", layout="wide")
-st.title("🚚 نظام الشحن (Access + Aramex)")
-
-# ======================
-# الاتصال بـ Access
-# ======================
-DB_FILE = "homeless.accdb"  # غيّر المسار لو عندك محلي
-conn_str = r'DRIVER={Microsoft Access Driver (*.mdb, *.accdb)};DBQ=' + DB_FILE
+# ====== TRY ACCESS (LOCAL ONLY) ======
+ACCESS_ENABLED = False
+conn = None
+cursor = None
 
 try:
+    import pyodbc
+
+    DB_FILE = r"C:\Users\ASUS\OneDrive\هوم لمسات.accdb"
+    conn_str = (
+        r"DRIVER={Microsoft Access Driver (*.mdb, *.accdb)};"
+        r"DBQ=" + DB_FILE
+    )
     conn = pyodbc.connect(conn_str)
     cursor = conn.cursor()
-except Exception as e:
-    st.error(f"❌ خطأ في الاتصال بـ Access: {e}")
-    st.stop()
+    ACCESS_ENABLED = True
+except Exception:
+    ACCESS_ENABLED = False
 
-# ======================
-# Aramex Date
-# ======================
-def to_aramex_datetime(dt):
-    epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
-    ms = int((dt - epoch).total_seconds() * 1000)
-    return f"/Date({ms})/"
 
-# ======================
-# UI Inputs
-# ======================
-st.subheader("📦 إدخال الطلبات")
-
-orders_text = st.text_area("أرقام الطلبات (كل رقم في سطر أو فاصلة)")
-pieces_text = st.text_area("عدد القطع (بنفس الترتيب)")
-
-default_pieces = st.number_input("عدد القطع الافتراضي", min_value=1, value=1)
-
-start = st.button("🚀 بدء الشحن")
-
-# ======================
-# جلب من Access
-# ======================
-def get_order(order_id):
-    cursor.execute("""
-        SELECT [Order Number], [First Name (Billing)], [Phone (Billing)], [MAIL],
-               [Address 1&2 (Billing)], [City (Billing)], [PostalCode], [CountryCode],
-               [WeightKG], [CODAmount], [Description], [ReferenceNumber]
-        FROM Orders
-        WHERE [Order Number] = ?
-    """, (int(order_id),))
-    return cursor.fetchone()
-
-# ======================
-# Aramex Credentials
-# ======================
-client_info = {
-    "UserName": "fitnessworld525@gmail.com",
-    "Password": "Aa12345678@",
-    "Version": "v1",
-    "AccountNumber": "71958996",
-    "AccountPin": "657448",
-    "AccountEntity": "RUH",
-    "AccountCountryCode": "SA"
+# ====== CITY MAP ======
+city_map = {
+    "الرياض": "Riyadh",
+    "جدة": "Jeddah",
+    "الدمام": "Dammam",
+    # (اختصرته هنا لكن تقدر ترجع تحط القاموس كامل عندك)
 }
 
-url = "https://ws.aramex.net/ShippingAPI.V2/Shipping/Service_1_0.svc/json/CreateShipments"
-headers = {"Content-Type": "application/json"}
 
-# ======================
-# تشغيل الشحن
-# ======================
-if start:
+# ====== STREAMLIT UI ======
+st.set_page_config(page_title="Orders System", layout="wide")
+st.title("📦 Orders System (Access + Streamlit)")
 
-    orders = [o.strip() for o in orders_text.replace("\n", ",").split(",") if o.strip()]
-    pieces = [p.strip() for p in pieces_text.replace("\n", ",").split(",") if p.strip()]
 
-    results = []
-    progress = st.progress(0)
+# ====== INPUT ======
+col1, col2 = st.columns(2)
 
-    for i, order in enumerate(orders):
+with col1:
+    order_id = st.text_input("رقم الطلب")
 
-        st.write(f"📦 معالجة الطلب: {order}")
+with col2:
+    action = st.selectbox(
+        "الإجراء",
+        ["ارسال صيانه", "إرجاع", "الصيانة", "الاستبدال", "إرسال الاستبدال", "إرسال نواقص"]
+    )
 
-        try:
-            row = get_order(order)
 
-            if not row:
-                st.error(f"❌ الطلب غير موجود: {order}")
-                continue
+# ====== LOAD FROM ACCESS ======
+def fetch_order(order_id):
+    if not ACCESS_ENABLED:
+        return None
 
-            num_pieces = int(pieces[i]) if i < len(pieces) else default_pieces
+    try:
+        cursor.execute("""
+            SELECT [Order Number], [First Name (Billing)], [Phone (Billing)],
+                   [MAIL], [Address 1&2 (Billing)], [City (Billing)],
+                   [PostalCode], [CountryCode]
+            FROM Orders
+            WHERE [Order Number] = ?
+        """, (int(order_id),))
 
-            shipping_dt = datetime.now(timezone.utc)
-            due_dt = shipping_dt + timedelta(days=2)
+        return cursor.fetchone()
 
-            payload = {
-                "ClientInfo": client_info,
-                "LabelInfo": {"ReportID": 9729, "ReportType": "URL"},
-                "Shipments": [{
-                    "Reference1": str(row[11]),
-                    "Shipper": {
-                        "AccountNumber": client_info["AccountNumber"],
-                        "PartyAddress": {
-                            "Line1": "Riyadh",
-                            "City": "Riyadh",
-                            "CountryCode": "SA"
-                        },
-                        "Contact": {
-                            "PersonName": "Company",
-                            "PhoneNumber1": "000"
-                        }
-                    },
-                    "Consignee": {
-                        "PartyAddress": {
-                            "Line1": row[4],
-                            "City": row[5],
-                            "PostCode": str(row[6]),
-                            "CountryCode": row[7]
-                        },
-                        "Contact": {
-                            "PersonName": row[1],
-                            "PhoneNumber1": str(row[2])
-                        }
-                    },
-                    "ShippingDateTime": to_aramex_datetime(shipping_dt),
-                    "DueDate": to_aramex_datetime(due_dt),
-                    "Details": {
-                        "ActualWeight": {"Value": float(row[8] or 1), "Unit": "KG"},
-                        "ChargeableWeight": {"Value": float(row[8] or 1), "Unit": "KG"},
-                        "DescriptionOfGoods": row[10],
-                        "NumberOfPieces": num_pieces,
-                        "ProductGroup": "DOM",
-                        "ProductType": "CDS",
-                        "PaymentType": "P",
-                        "CashOnDeliveryAmount": {"Value": float(row[9] or 0), "CurrencyCode": "SAR"}
-                    }
-                }]
-            }
+    except Exception as e:
+        st.error(f"DB Error: {e}")
+        return None
 
-            res = requests.post(url, json=payload, headers=headers)
 
-            if res.status_code == 200:
-                try:
-                    root = ET.fromstring(res.text)
+# ====== ACTION FORMAT ======
+def format_second_col(num, action):
+    if action == "إرجاع":
+        return num + "*"
+    elif action == "الصيانة":
+        return num + "#"
+    elif action == "الاستبدال":
+        return num + "*#"
+    elif action == "إرسال الاستبدال":
+        return num + "*#&"
+    elif action == "إرسال نواقص":
+        return num + "&"
+    elif action == "ارسال صيانه":
+        return num + "#&"
+    return num
 
-                    tracking = root.find('.//ID')
-                    label = root.find('.//LabelURL')
 
-                    tracking_id = tracking.text if tracking is not None else ""
-                    label_url = label.text if label is not None else ""
+# ====== SESSION DATA ======
+if "rows" not in st.session_state:
+    st.session_state.rows = []
 
-                    results.append({
-                        "Order": order,
-                        "Tracking": tracking_id,
-                        "LabelURL": label_url
-                    })
 
-                    st.success(f"✅ تم شحن {order}")
+# ====== ADD BUTTON ======
+if st.button("➕ إضافة"):
+    if not order_id.isdigit():
+        st.error("رقم الطلب غير صحيح")
+    else:
+        data = fetch_order(order_id)
 
-                except:
-                    st.error(f"❌ خطأ قراءة رد Aramex {order}")
+        second = format_second_col(order_id, action)
 
-            else:
-                st.error(f"❌ فشل {order} - {res.status_code}")
+        if data:
+            city_en = city_map.get(data[5], data[5])
 
-        except Exception as e:
-            st.error(f"❌ خطأ في {order}: {e}")
+            row = [
+                data[0],
+                second,
+                data[1],
+                data[2],
+                data[3],
+                data[4],
+                city_en,
+                data[6],
+                data[7],
+                3,
+                0,
+                "منتجات"
+            ]
+        else:
+            row = [
+                order_id,
+                second,
+                "لا توجد بيانات",
+                "-", "-", "-", "-", "-", "-", 3, 0, "منتجات"
+            ]
 
-        progress.progress((i + 1) / len(orders))
+        st.session_state.rows.append(row)
 
-    # ======================
-    # حفظ Excel
-    # ======================
-    if results:
-        df = pd.DataFrame(results)
-        file_name = "shipments_output.xlsx"
-        df.to_excel(file_name, index=False)
 
-        st.success("🎉 تم الانتهاء")
+# ====== TABLE ======
+columns = [
+    "Order Number",
+    "Order Number*",
+    "Name",
+    "Phone",
+    "Email",
+    "Address",
+    "City",
+    "Postal",
+    "Country",
+    "WeightKG",
+    "COD",
+    "Description"
+]
+
+if st.session_state.rows:
+    df = pd.DataFrame(st.session_state.rows, columns=columns)
+    st.dataframe(df, use_container_width=True)
+
+
+    # ====== EXPORT EXCEL ======
+    def convert_to_excel(dataframe):
+        file_path = "Orders_Output.xlsx"
+        dataframe.to_excel(file_path, index=False)
+        return file_path
+
+
+    if st.button("⬇️ تصدير Excel"):
+        path = convert_to_excel(df)
+        st.success("تم التصدير")
         st.download_button(
-            "📥 تحميل الملف",
-            data=open(file_name, "rb"),
-            file_name=file_name
+            "تحميل الملف",
+            data=open(path, "rb"),
+            file_name="Orders_Output.xlsx"
         )
+else:
+    st.info("لا توجد بيانات")
