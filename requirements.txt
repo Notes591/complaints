@@ -9,4 +9,11 @@ fpdf
 streamlit-drawable-canvas
 Pillow
 requests
+streamlit
+gspread
+oauth2client
+streamlit-autorefresh
+pandas
+openpyxl
+requests
 
