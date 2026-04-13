@@ -417,21 +417,7 @@ if len(responded_notes) > 1:
 else:
     st.info("لا توجد شكاوى مردودة حالياً.")
 
-# ====== عرض الأرشيف ======
-st.header("📦 الأرشيف:")
-archived = archive_sheet.get_all_values()
-if len(archived) > 1:
-    if "archive_show_count" not in st.session_state:
-        st.session_state["archive_show_count"] = 50
-    show_count = st.session_state["archive_show_count"]
-    for i, row in enumerate(archived[1:show_count], start=2):
-        render_complaint(archive_sheet, i, row, in_archive=True)
-    if len(archived) - 1 > show_count:
-        if st.button("عرض المزيد من الأرشيف"):
-            st.session_state["archive_show_count"] += 50
-            st.experimental_rerun()
-else:
-    st.info("لا توجد شكاوى مؤرشفة حالياً.")
+
 
 # ====== قسم إضافة "معلق أرامكس" (كما طلبت قبل عرض المعلق) ======
 st.markdown("---")
