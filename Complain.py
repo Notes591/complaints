@@ -255,9 +255,10 @@ def check_and_notify_aramex_change(order_id, comp_type, awb, current_status, lab
     prev     = snap_get(snap_key)
 
     if prev is None:
-    if current_str:
-        add_rw_notification(order_id, comp_type, "جديد", current_str)
-    snap_set(snap_key, current_str)
+        if current_str:
+            add_rw_notification(order_id, comp_type, "جديد", current_str)
+
+        snap_set(snap_key, current_str)
     return
 
     if _is_error_status(prev):
