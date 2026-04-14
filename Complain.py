@@ -24,7 +24,7 @@ SHEET_NAME = "Complaints"
 sheet_titles = [
     "Complaints", "Responded", "Archive", "Types",
     "معلق ارامكس", "أرشيف أرامكس", "ReturnWarehouse", "Order Number",
-    "Notifications", "AramexNotifications"
+    "Notifications", "AramexNotifications", "RWNotifications"
 ]
 
 sheets_dict = {}
@@ -45,19 +45,23 @@ return_warehouse_sheet = sheets_dict["ReturnWarehouse"]
 order_number_sheet     = sheets_dict["Order Number"]
 notifications_sheet    = sheets_dict["Notifications"]
 aramex_notif_sheet     = sheets_dict["AramexNotifications"]
+rw_notif_sheet         = sheets_dict["RWNotifications"]
 
 # ====== إعدادات الصفحة ======
 st.set_page_config(page_title="📢 نظام الشكاوى", page_icon="⚠️", layout="wide")
 
 # ==============================================================
-# 🔔 نظام الإشعارات المزدوج
+# 🔔 نظام الإشعارات الثلاثي
 # ==============================================================
 #
-#  شيت Notifications        : إشعارات عامة (تعديل / حذف / أرشفة / بحث / إضافة)
+#  شيت Notifications        : إشعارات عامة
 #  A=order_id | B=comp_type | C=section | D=message | E=date | F=status
 #
-#  شيت AramexNotifications  : تغييرات AWB + ReturnWarehouse
-#  A=order_id | B=comp_type | C=awb_or_source | D=before | E=after | F=date | G=status
+#  شيت AramexNotifications  : تغييرات حالة AWB فقط
+#  A=order_id | B=comp_type | C=awb | D=before | E=after | F=date | G=status
+#
+#  شيت RWNotifications      : تغييرات ReturnWarehouse فقط
+#  A=order_id | B=comp_type | C=field | D=before | E=after | F=date | G=status
 #
 # ==============================================================
 
@@ -117,6 +121,21 @@ NOTIFICATION_CSS = """
 """
 
 # ─────────────────────────────────────────────
+# دالة مساعدة: هل القيمة ناتجة عن خطأ؟
+# ─────────────────────────────────────────────
+def _is_error_status(value: str) -> bool:
+    """
+    ترجع True لو القيمة ناتجة عن فشل جلب أرامكس،
+    وبالتالي لا تُعتبر تغييراً حقيقياً ولا تُسجَّل كإشعار.
+    """
+    if not value:
+        return True
+    err_markers = ["خطأ", "❌", "error", "Error", "unbound", "failed", "Failed",
+                   "فشل الاتصال", "لا توجد حالة"]
+    return any(m in value for m in err_markers)
+
+
+# ─────────────────────────────────────────────
 # دوال إضافة الإشعارات
 # ─────────────────────────────────────────────
 
@@ -135,17 +154,29 @@ def add_notification(order_id, section, message, comp_type=""):
         pass
 
 
-def add_aramex_or_rw_notification(order_id, comp_type, source_label, before, after):
-    """
-    إشعار تغيير AWB أو ReturnWarehouse — يُكتب في شيت AramexNotifications.
-    source_label : مثلاً  'Outbound AWB: 12345'  أو  'ReturnWarehouse'
-    before / after : القيمة قبل وبعد التغيير
-    """
+def add_aramex_notification(order_id, comp_type, awb, before, after):
+    """إشعار تغيير AWB — يُكتب في شيت AramexNotifications."""
     try:
         aramex_notif_sheet.append_row([
             str(order_id),
             str(comp_type),
-            str(source_label),
+            str(awb),
+            str(before),
+            str(after),
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "NEW"
+        ])
+    except Exception:
+        pass
+
+
+def add_rw_notification(order_id, comp_type, field_label, before, after):
+    """إشعار تغيير ReturnWarehouse — يُكتب في شيت RWNotifications."""
+    try:
+        rw_notif_sheet.append_row([
+            str(order_id),
+            str(comp_type),
+            str(field_label),
             str(before),
             str(after),
             datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -169,18 +200,31 @@ def get_aramex_snapshot(awb):
     return st.session_state.get(_snap_key(awb), None)
 
 def check_and_notify_aramex_change(order_id, comp_type, awb, current_status, label_prefix="AWB"):
-    """يقارن الحالة الحالية بالسابقة — إن اختلفت يُسجّل إشعار في AramexNotifications."""
+    """
+    يقارن الحالة الحالية بالسابقة.
+    - لو أي من القيمتين تحتوي على خطأ (تحميل ناقص / فشل API) → لا يسجّل.
+    - لو تغيّرت فعلاً → يسجّل في AramexNotifications.
+    """
     if not awb or not current_status:
+        return
+    # تجاهل القيم الخاطئة كلياً — لا snapshot ولا إشعار
+    if _is_error_status(current_status):
         return
     prev = get_aramex_snapshot(awb)
     if prev is None:
+        # أول مرة نشوف هذا AWB في الجلسة — نحفظ فقط بدون إشعار
         save_aramex_snapshot(awb, current_status)
         return
+    # لو الحالة القديمة المحفوظة كانت خطأ — نحدّث الـ snapshot بدون إشعار
+    if _is_error_status(prev):
+        save_aramex_snapshot(awb, current_status)
+        return
+    # تغيير حقيقي
     if prev != current_status:
-        add_aramex_or_rw_notification(
+        add_aramex_notification(
             order_id=order_id,
             comp_type=comp_type,
-            source_label=f"{label_prefix}: {awb}",
+            awb=f"{label_prefix}: {awb}",
             before=prev,
             after=current_status
         )
@@ -203,7 +247,7 @@ def get_rw_snapshot(order_id):
 def check_and_notify_rw_change(order_id, comp_type, rw_record):
     """
     يقارن سجل ReturnWarehouse الحالي بالسابق.
-    إن تغيّر أيّ حقل يُسجّل إشعار في AramexNotifications.
+    إن تغيّر يُسجّل إشعار في RWNotifications.
     """
     if not rw_record:
         return
@@ -213,10 +257,10 @@ def check_and_notify_rw_change(order_id, comp_type, rw_record):
         save_rw_snapshot(order_id, current_str)
         return
     if prev != current_str:
-        add_aramex_or_rw_notification(
+        add_rw_notification(
             order_id=order_id,
             comp_type=comp_type,
-            source_label="ReturnWarehouse",
+            field_label="ReturnWarehouse",
             before=prev,
             after=current_str
         )
@@ -243,20 +287,27 @@ def get_aramex_notifications():
     except Exception:
         return []
 
+@st.cache_data(ttl=10)
+def get_rw_notifications():
+    try:
+        data = rw_notif_sheet.get_all_values()
+        return data[1:] if len(data) > 1 else []
+    except Exception:
+        return []
+
 
 # ─────────────────────────────────────────────
 # حذف المقروءة نهائياً
 # ─────────────────────────────────────────────
 
-def _delete_read_rows(sheet):
-    """يحذف كل الصفوف التي قيمة عمود الحالة = READ من الشيت نهائياً."""
+def _delete_read_rows(sheet, status_col_index=5):
+    """يحذف كل الصفوف التي قيمة عمود الحالة = READ."""
     try:
         data = sheet.get_all_values()
-        # نحدد فهرس عمود الحالة: 5 (F) للعامة، 6 (G) لأرامكس — نتحقق من الطول
         rows_to_delete = []
         for i, row in enumerate(data[1:], start=2):
-            status_col = row[5] if len(row) > 5 else ""
-            if status_col == "READ":
+            val = row[status_col_index] if len(row) > status_col_index else ""
+            if val == "READ":
                 rows_to_delete.append(i)
         for row_idx in reversed(rows_to_delete):
             sheet.delete_rows(row_idx)
@@ -264,13 +315,13 @@ def _delete_read_rows(sheet):
         pass
 
 def _mark_all_read_then_delete(sheet, status_col_index=5):
-    """يعلّم كل الصفوف READ ثم يحذفها."""
+    """يعلّم كل الصفوف READ ثم يحذفها فوراً."""
     try:
         data = sheet.get_all_values()
         col_letter = chr(ord('A') + status_col_index)
         for i in range(2, len(data) + 1):
             sheet.update(f"{col_letter}{i}", [["READ"]])
-        _delete_read_rows(sheet)
+        _delete_read_rows(sheet, status_col_index)
     except Exception:
         pass
 
@@ -283,15 +334,12 @@ def _render_general_notification(n):
     while len(n) < 6:
         n.append("")
     order_id, comp_type, section, message, date_str, status = n[:6]
-
     is_new     = (status == "NEW")
     card_class = "notif-card-new" if is_new else "notif-card-read"
     icon       = "🔵" if is_new else "⚪"
-
     order_badge = f'<span class="notif-order">#{order_id}</span>' if order_id else ''
     type_badge  = f'<span class="notif-type">{comp_type}</span>'  if comp_type else ''
     sec_badge   = f'<span class="notif-sec">📍 {section}</span>'  if section else ''
-
     st.markdown(f"""
     <div class="{card_class}">
         <div style="display:flex;flex-wrap:wrap;gap:4px;align-items:center;">
@@ -303,40 +351,50 @@ def _render_general_notification(n):
     </div>""", unsafe_allow_html=True)
 
 
-def _render_aramex_rw_notification(n):
+def _render_aramex_notification(n):
     while len(n) < 7:
         n.append("")
-    order_id, comp_type, source_label, before, after, date_str, status = n[:7]
-
-    is_new = (status == "NEW")
-    is_rw  = "ReturnWarehouse" in source_label
-
-    if is_new and is_rw:
-        card_class = "notif-card-rw"
-        icon       = "📦"
-    elif is_new:
-        card_class = "notif-card-aramex"
-        icon       = "🔄"
-    else:
-        card_class = "notif-card-read"
-        icon       = "⚪"
-
-    order_badge  = f'<span class="notif-order">#{order_id}</span>' if order_id else ''
-    type_badge   = f'<span class="notif-type">{comp_type}</span>'  if comp_type else ''
-    source_badge = f'<span class="notif-sec">{source_label}</span>' if source_label else ''
-
+    order_id, comp_type, awb, before, after, date_str, status = n[:7]
+    is_new     = (status == "NEW")
+    card_class = "notif-card-aramex" if is_new else "notif-card-read"
+    icon       = "🔄" if is_new else "⚪"
+    order_badge = f'<span class="notif-order">#{order_id}</span>' if order_id else ''
+    type_badge  = f'<span class="notif-type">{comp_type}</span>'  if comp_type else ''
+    awb_badge   = f'<span class="notif-sec">📦 {awb}</span>'      if awb else ''
     before_short = before[:80] + ("…" if len(before) > 80 else "")
     after_short  = after[:80]  + ("…" if len(after)  > 80 else "")
-
-    label_text = "تغيّر في ReturnWarehouse" if is_rw else "تغيّرت حالة الشحنة"
-
     st.markdown(f"""
     <div class="{card_class}">
         <div style="display:flex;flex-wrap:wrap;gap:4px;align-items:center;">
             <span style="font-size:15px;">{icon}</span>
-            {order_badge}{type_badge}{source_badge}
+            {order_badge}{type_badge}{awb_badge}
         </div>
-        <div class="notif-msg">{label_text}</div>
+        <div class="notif-msg">تغيّرت حالة الشحنة</div>
+        <div class="notif-before">قبل: {before_short}</div>
+        <div class="notif-after">بعد:  {after_short}</div>
+        <div class="notif-time">⏰ {date_str}</div>
+    </div>""", unsafe_allow_html=True)
+
+
+def _render_rw_notification(n):
+    while len(n) < 7:
+        n.append("")
+    order_id, comp_type, field_label, before, after, date_str, status = n[:7]
+    is_new     = (status == "NEW")
+    card_class = "notif-card-rw" if is_new else "notif-card-read"
+    icon       = "📦" if is_new else "⚪"
+    order_badge  = f'<span class="notif-order">#{order_id}</span>'    if order_id else ''
+    type_badge   = f'<span class="notif-type">{comp_type}</span>'     if comp_type else ''
+    field_badge  = f'<span class="notif-sec">🏭 {field_label}</span>' if field_label else ''
+    before_short = before[:80] + ("…" if len(before) > 80 else "")
+    after_short  = after[:80]  + ("…" if len(after)  > 80 else "")
+    st.markdown(f"""
+    <div class="{card_class}">
+        <div style="display:flex;flex-wrap:wrap;gap:4px;align-items:center;">
+            <span style="font-size:15px;">{icon}</span>
+            {order_badge}{type_badge}{field_badge}
+        </div>
+        <div class="notif-msg">تغيّر في سجل المخزن</div>
         <div class="notif-before">قبل: {before_short}</div>
         <div class="notif-after">بعد:  {after_short}</div>
         <div class="notif-time">⏰ {date_str}</div>
@@ -344,7 +402,7 @@ def _render_aramex_rw_notification(n):
 
 
 # ─────────────────────────────────────────────
-# لوحة الإشعارات الرئيسية
+# لوحة الإشعارات الرئيسية (3 أعمدة)
 # ─────────────────────────────────────────────
 
 def render_notifications_panel():
@@ -352,10 +410,12 @@ def render_notifications_panel():
 
     notifications        = get_notifications()
     aramex_notifications = get_aramex_notifications()
+    rw_notifications     = get_rw_notifications()
 
     unread_general = [n for n in notifications        if len(n) > 5 and n[5] == "NEW"]
     unread_aramex  = [n for n in aramex_notifications if len(n) > 6 and n[6] == "NEW"]
-    total_unread   = len(unread_general) + len(unread_aramex)
+    unread_rw      = [n for n in rw_notifications     if len(n) > 6 and n[6] == "NEW"]
+    total_unread   = len(unread_general) + len(unread_aramex) + len(unread_rw)
 
     badge = (
         f'<span class="notif-badge">{total_unread}</span>'
@@ -371,35 +431,49 @@ def render_notifications_panel():
         unsafe_allow_html=True
     )
 
-    col_gen, col_aramex = st.columns(2)
+    col_gen, col_aramex, col_rw = st.columns(3)
 
     # ── إشعارات عامة ──
     with col_gen:
-        with st.expander(f"📬 إشعارات عامة ({len(unread_general)} جديد)", expanded=False):
+        with st.expander(f"📬 عامة ({len(unread_general)} جديد)", expanded=False):
             if unread_general:
-                if st.button("✔️ تعليم الكل كمقروء وحذفهم", key="mark_all_read_btn"):
+                if st.button("✔️ مقروء وحذف", key="mark_all_read_btn"):
                     _mark_all_read_then_delete(notifications_sheet, status_col_index=5)
                     st.cache_data.clear()
                     st.rerun()
             if not unread_general:
-                st.info("لا توجد إشعارات عامة جديدة.")
+                st.info("لا توجد إشعارات جديدة.")
             else:
                 for n in reversed(unread_general[-60:]):
                     _render_general_notification(n)
 
-    # ── إشعارات أرامكس + ReturnWarehouse ──
+    # ── إشعارات أرامكس ──
     with col_aramex:
-        with st.expander(f"🚚 إشعارات أرامكس / المخزن ({len(unread_aramex)} جديد)", expanded=False):
+        with st.expander(f"🚚 أرامكس ({len(unread_aramex)} جديد)", expanded=False):
             if unread_aramex:
-                if st.button("✔️ تعليم الكل كمقروء وحذفهم", key="mark_all_aramex_btn"):
+                if st.button("✔️ مقروء وحذف", key="mark_all_aramex_btn"):
                     _mark_all_read_then_delete(aramex_notif_sheet, status_col_index=6)
                     st.cache_data.clear()
                     st.rerun()
             if not unread_aramex:
-                st.info("لا توجد تغييرات جديدة.")
+                st.info("لا توجد تغييرات أرامكس.")
             else:
                 for n in reversed(unread_aramex[-60:]):
-                    _render_aramex_rw_notification(n)
+                    _render_aramex_notification(n)
+
+    # ── إشعارات المخزن ──
+    with col_rw:
+        with st.expander(f"📦 المخزن ({len(unread_rw)} جديد)", expanded=False):
+            if unread_rw:
+                if st.button("✔️ مقروء وحذف", key="mark_all_rw_btn"):
+                    _mark_all_read_then_delete(rw_notif_sheet, status_col_index=6)
+                    st.cache_data.clear()
+                    st.rerun()
+            if not unread_rw:
+                st.info("لا توجد تغييرات مخزن.")
+            else:
+                for n in reversed(unread_rw[-60:]):
+                    _render_rw_notification(n)
 
 # ==============================================================
 # ✅ END نظام الإشعارات
@@ -517,7 +591,8 @@ def get_aramex_status(awb_number):
         payload = {
             "ClientInfo": client_info,
             "Shipments": [awb_number],
-            "Transaction": {"Reference1": "", "Reference2": "", "Reference3": "", "Reference4": "", "Reference5": ""},
+            "Transaction": {"Reference1": "", "Reference2": "", "Reference3": "",
+                            "Reference4": "", "Reference5": ""},
             "LabelInfo": None
         }
         url = "https://ws.aramex.net/ShippingAPI.V2/Tracking/Service_1_0.svc/json/TrackShipments"
@@ -542,12 +617,16 @@ def get_aramex_status(awb_number):
                 if tracks:
                     last_track = sorted(
                         tracks,
-                        key=lambda tr: tr.find('UpdateDateTime').text if tr.find('UpdateDateTime') is not None else '',
+                        key=lambda tr: tr.find('UpdateDateTime').text
+                        if tr.find('UpdateDateTime') is not None else '',
                         reverse=True
                     )[0]
-                    desc      = last_track.find('UpdateDescription').text if last_track.find('UpdateDescription') is not None else "—"
-                    date      = last_track.find('UpdateDateTime').text    if last_track.find('UpdateDateTime')    is not None else "—"
-                    loc       = last_track.find('UpdateLocation').text    if last_track.find('UpdateLocation')    is not None else "—"
+                    desc      = last_track.find('UpdateDescription').text \
+                                if last_track.find('UpdateDescription') is not None else "—"
+                    date      = last_track.find('UpdateDateTime').text \
+                                if last_track.find('UpdateDateTime') is not None else "—"
+                    loc       = last_track.find('UpdateLocation').text \
+                                if last_track.find('UpdateLocation') is not None else "—"
                     reference = extract_reference(last_track)
                     info = f"{desc} بتاريخ {date} في {loc}"
                     if reference:
@@ -601,10 +680,10 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
                     f"رقم الشحنة: {rw_record['رقم الشحنة']}\n"
                     f"البيان: {rw_record['البيان']}"
                 )
-                # كشف تغيير ReturnWarehouse
                 check_and_notify_rw_change(comp_id, comp_type, rw_record)
 
-            new_type     = st.selectbox("✏️ عدل نوع الشكوى", [comp_type] + [t for t in types_list if t != comp_type])
+            new_type     = st.selectbox("✏️ عدل نوع الشكوى",
+                                        [comp_type] + [t for t in types_list if t != comp_type])
             new_notes    = st.text_area("✏️ عدل الملاحظات",  value=notes)
             new_action   = st.text_area("✏️ عدل الإجراء",    value=action)
             new_outbound = st.text_input("✏️ Outbound AWB",  value=outbound_awb)
@@ -614,12 +693,14 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
             if new_outbound:
                 status_out = cached_aramex_status(new_outbound)
                 st.info(f"🚚 Outbound AWB: {new_outbound} | الحالة: {status_out}")
-                check_and_notify_aramex_change(comp_id, comp_type, new_outbound, status_out, label_prefix="Outbound AWB")
+                check_and_notify_aramex_change(comp_id, comp_type, new_outbound,
+                                               status_out, label_prefix="Outbound AWB")
 
             if new_inbound:
                 status_in = cached_aramex_status(new_inbound)
                 st.info(f"📦 Inbound AWB: {new_inbound} | الحالة: {status_in}")
-                check_and_notify_aramex_change(comp_id, comp_type, new_inbound, status_in, label_prefix="Inbound AWB")
+                check_and_notify_aramex_change(comp_id, comp_type, new_inbound,
+                                               status_in, label_prefix="Inbound AWB")
 
             col1, col2, col3, col4 = st.columns(4)
             submitted_save    = col1.form_submit_button("💾 حفظ")
@@ -649,7 +730,8 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
 
             # ── أرشفة ──
             if submitted_archive:
-                if safe_append(archive_sheet, [comp_id, new_type, new_notes, new_action, date_added, restored, new_outbound, new_inbound]):
+                if safe_append(archive_sheet, [comp_id, new_type, new_notes, new_action,
+                                               date_added, restored, new_outbound, new_inbound]):
                     if safe_delete(sheet, i):
                         add_notification(comp_id, "الأرشيف", "تم أرشفة الشكوى", comp_type=new_type)
                         st.success("♻️ الشكوى انتقلت للأرشيف")
@@ -657,14 +739,18 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
             # ── نقل ──
             if submitted_move:
                 if not in_responded:
-                    if safe_append(responded_sheet, [comp_id, new_type, new_notes, new_action, date_added, restored, new_outbound, new_inbound]):
+                    if safe_append(responded_sheet, [comp_id, new_type, new_notes, new_action,
+                                                     date_added, restored, new_outbound, new_inbound]):
                         if safe_delete(sheet, i):
-                            add_notification(comp_id, "المردودة", "تم نقل الشكوى إلى الإجراءات المردودة", comp_type=new_type)
+                            add_notification(comp_id, "المردودة",
+                                             "تم نقل الشكوى إلى الإجراءات المردودة", comp_type=new_type)
                             st.success("✅ انتقلت للإجراءات المردودة")
                 else:
-                    if safe_append(complaints_sheet, [comp_id, new_type, new_notes, new_action, date_added, restored, new_outbound, new_inbound]):
+                    if safe_append(complaints_sheet, [comp_id, new_type, new_notes, new_action,
+                                                      date_added, restored, new_outbound, new_inbound]):
                         if safe_delete(sheet, i):
-                            add_notification(comp_id, "النشطة", "تم إرجاع الشكوى للنشطة", comp_type=new_type)
+                            add_notification(comp_id, "النشطة",
+                                             "تم إرجاع الشكوى للنشطة", comp_type=new_type)
                             st.success("✅ انتقلت للنشطة")
 
 
@@ -686,11 +772,14 @@ if search_id.strip():
 
         for i, row in enumerate(data[1:], start=2) if data else []:
             if len(row) > 0 and str(row[0]) == search_id.strip():
-                location = "النشطة" if not in_responded and not in_archive else "المردودة" if in_responded else "الأرشيف"
+                location = ("النشطة" if not in_responded and not in_archive
+                            else "المردودة" if in_responded else "الأرشيف")
                 st.success(f"✅ الشكوى موجودة في {location}")
                 comp_type_found = row[1] if len(row) > 1 else ""
-                add_notification(search_id, "بحث", f"تم فتح الشكوى من {location}", comp_type=comp_type_found)
-                render_complaint(sheet_obj, i, row, in_responded=in_responded, in_archive=in_archive)
+                add_notification(search_id, "بحث", f"تم فتح الشكوى من {location}",
+                                 comp_type=comp_type_found)
+                render_complaint(sheet_obj, i, row,
+                                 in_responded=in_responded, in_archive=in_archive)
                 found = True
                 break
         if found:
@@ -747,17 +836,25 @@ with st.form("add_complaint", clear_on_submit=True):
                         ):
                             if safe_delete(archive_sheet, idx):
                                 st.success("♻️ تم استرجاع الشكوى من الأرشيف")
-                                add_notification(comp_id, "استرجاع", "تم استرجاع الشكوى من الأرشيف", comp_type=restored_type)
+                                add_notification(comp_id, "استرجاع",
+                                                 "تم استرجاع الشكوى من الأرشيف",
+                                                 comp_type=restored_type)
                         break
             else:
                 if action.strip():
-                    if safe_append(responded_sheet, [comp_id, comp_type, notes, action, date_now, "", outbound_awb, inbound_awb]):
+                    if safe_append(responded_sheet,
+                                   [comp_id, comp_type, notes, action,
+                                    date_now, "", outbound_awb, inbound_awb]):
                         st.success("✅ تم تسجيل الشكوى في المردودة")
-                        add_notification(comp_id, "إضافة", "تم تسجيل الشكوى في المردودة", comp_type=comp_type)
+                        add_notification(comp_id, "إضافة",
+                                         "تم تسجيل الشكوى في المردودة", comp_type=comp_type)
                 else:
-                    if safe_append(complaints_sheet, [comp_id, comp_type, notes, "", date_now, "", outbound_awb, inbound_awb]):
+                    if safe_append(complaints_sheet,
+                                   [comp_id, comp_type, notes, "",
+                                    date_now, "", outbound_awb, inbound_awb]):
                         st.success("✅ تم تسجيل الشكوى في النشطة")
-                        add_notification(comp_id, "إضافة", "تم تسجيل الشكوى في النشطة", comp_type=comp_type)
+                        add_notification(comp_id, "إضافة",
+                                         "تم تسجيل الشكوى في النشطة", comp_type=comp_type)
         else:
             st.error("⚠️ لازم تدخل رقم الشكوى وتختار النوع")
 
@@ -780,7 +877,8 @@ if len(responded_notes) > 1:
     types_in_responded = list({row[1] for row in responded_notes[1:] if row})
     for complaint_type in types_in_responded:
         with st.expander(f"📌 نوع الشكوى: {complaint_type}"):
-            type_rows = [(i, row) for i, row in enumerate(responded_notes[1:], start=2) if row[1] == complaint_type]
+            type_rows = [(i, row) for i, row in enumerate(responded_notes[1:], start=2)
+                         if row[1] == complaint_type]
             followup_1, followup_2, others = [], [], []
 
             for i, row in type_rows:
@@ -821,9 +919,9 @@ st.markdown("---")
 st.header("🚚 معلق ارامكس")
 
 with st.form("add_aramex", clear_on_submit=True):
-    order_id = st.text_input("🔢 رقم الطلب")
-    status   = st.text_input("📌 الحالة")
-    action   = st.text_area("✅ الإجراء المتخذ")
+    order_id  = st.text_input("🔢 رقم الطلب")
+    status    = st.text_input("📌 الحالة")
+    action    = st.text_area("✅ الإجراء المتخذ")
     submitted = st.form_submit_button("➕ إضافة")
 
     if submitted:
@@ -851,11 +949,12 @@ if len(aramex_pending) > 1:
             st.write(f"✅ الإجراء: {action}")
             st.caption(f"📅 {date_added}")
 
-            # عرض حالة أرامكس + كشف تغيير
+            # عرض حالة أرامكس + كشف تغيير (مع تجاهل الأخطاء)
             current_aramex = cached_aramex_status(order_id)
             if current_aramex:
                 st.info(f"🚚 حالة أرامكس الآن: {current_aramex}")
-                check_and_notify_aramex_change(order_id, "معلق أرامكس", order_id, current_aramex, label_prefix="AWB")
+                check_and_notify_aramex_change(order_id, "معلق أرامكس", order_id,
+                                               current_aramex, label_prefix="AWB")
 
             with st.form(key=f"aramex_{order_id}_{i}"):
                 new_status = st.text_input("✏️ تعديل الحالة",  value=status)
@@ -869,12 +968,14 @@ if len(aramex_pending) > 1:
                 if save:
                     safe_update(aramex_sheet, f"B{i}", [[new_status]])
                     safe_update(aramex_sheet, f"D{i}", [[new_action]])
-                    # إشعار تغيير الحالة اليدوي في AramexNotifications
-                    if new_status != status:
-                        add_aramex_or_rw_notification(
+                    # إشعار تغيير الحالة اليدوي — فقط لو مش خطأ
+                    if (new_status != status
+                            and not _is_error_status(new_status)
+                            and not _is_error_status(status)):
+                        add_aramex_notification(
                             order_id=order_id,
                             comp_type="معلق أرامكس",
-                            source_label=f"AWB: {order_id}",
+                            awb=f"AWB: {order_id}",
                             before=status,
                             after=new_status
                         )
