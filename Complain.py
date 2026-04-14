@@ -128,11 +128,11 @@ def _is_error_status(value: str) -> bool:
     ترجع True لو القيمة ناتجة عن فشل جلب أرامكس،
     وبالتالي لا تُعتبر تغييراً حقيقياً ولا تُسجَّل كإشعار.
     """
-    if not value:
+    if not value or not str(value).strip():
         return True
     err_markers = ["خطأ", "❌", "error", "Error", "unbound", "failed", "Failed",
                    "فشل الاتصال", "لا توجد حالة"]
-    return any(m in value for m in err_markers)
+    return any(m in str(value) for m in err_markers)
 
 
 # ─────────────────────────────────────────────
@@ -201,25 +201,43 @@ def get_aramex_snapshot(awb):
 
 def check_and_notify_aramex_change(order_id, comp_type, awb, current_status, label_prefix="AWB"):
     """
-    يقارن الحالة الحالية بالسابقة.
-    - لو أي من القيمتين تحتوي على خطأ (تحميل ناقص / فشل API) → لا يسجّل.
-    - لو تغيّرت فعلاً → يسجّل في AramexNotifications.
+    يقارن حالة AWB الحالية بالسابقة ويرسل إشعار عند التغيير.
+
+    حالات مُعالَجة:
+    - أول ظهور للـ AWB في الجلسة مع حالة صحيحة → يحفظ snapshot + يرسل إشعار 'ظهور جديد'
+    - حالة خاطئة (error) → يتجاهل كلياً بدون تعديل snapshot
+    - الـ snapshot القديم كان خطأ والحالي صحيح → يحدّث snapshot + يرسل إشعار 'ظهور بعد خطأ'
+    - تغيير حقيقي بين حالتين صحيحتين → يرسل إشعار التغيير
+    - لا تغيير → لا شيء
     """
-    if not awb or not current_status:
+    if not awb or not str(awb).strip():
         return
-    # تجاهل القيم الخاطئة كلياً — لا snapshot ولا إشعار
+
+    # الحالة الحالية خاطئة → تجاهل كلياً (لا snapshot، لا إشعار)
     if _is_error_status(current_status):
         return
+
     prev = get_aramex_snapshot(awb)
+
+    # أول مرة نشوف هذا AWB في الجلسة
     if prev is None:
-        # أول مرة نشوف هذا AWB في الجلسة — نحفظ فقط بدون إشعار
         save_aramex_snapshot(awb, current_status)
+        # ظهور AWB لأول مرة بحالة صحيحة → إشعار
+        add_aramex_notification(
+            order_id=order_id,
+            comp_type=comp_type,
+            awb=f"{label_prefix}: {awb}",
+            before="ظهر لأول مرة",
+            after=current_status
+        )
         return
-    # لو الحالة القديمة المحفوظة كانت خطأ — نحدّث الـ snapshot بدون إشعار
+
+    # الـ snapshot القديم كان خطأ → نحدّث بدون إشعار تغيير (الحالة الحالية صحيحة)
     if _is_error_status(prev):
         save_aramex_snapshot(awb, current_status)
         return
-    # تغيير حقيقي
+
+    # كلاهما صحيحان — تحقق من التغيير الفعلي
     if prev != current_status:
         add_aramex_notification(
             order_id=order_id,
@@ -235,36 +253,65 @@ def check_and_notify_aramex_change(order_id, comp_type, awb, current_status, lab
 # Snapshot ReturnWarehouse (session_state)
 # ─────────────────────────────────────────────
 
-def _rw_snap_key(order_id):
-    return f"rw_snap_{order_id}"
-
-def save_rw_snapshot(order_id, record_str):
-    st.session_state[_rw_snap_key(order_id)] = record_str
-
-def get_rw_snapshot(order_id):
-    return st.session_state.get(_rw_snap_key(order_id), None)
+def _rw_record_to_str(rw_record):
+    """تحويل موحّد للمقارنة بترتيب ثابت للمفاتيح — يمنع false positives."""
+    if not rw_record:
+        return ""
+    keys = ["رقم الطلب", "الفاتورة", "التاريخ", "الزبون", "المبلغ", "رقم الشحنة", "البيان"]
+    return "|".join(str(rw_record.get(k, "")) for k in keys)
 
 def check_and_notify_rw_change(order_id, comp_type, rw_record):
     """
-    يقارن سجل ReturnWarehouse الحالي بالسابق.
-    إن تغيّر يُسجّل إشعار في RWNotifications.
+    يكشف تغييرات ReturnWarehouse ويرسل إشعار.
+
+    حالات مُعالَجة:
+    - أول مرة + في سجل → إشعار 'ظهر سجل جديد في المخزن'
+    - أول مرة + مفيش سجل → يحفظ فقط بدون إشعار
+    - كان موجوداً واختفى → إشعار 'اختفى من المخزن'
+    - تغيّرت بياناته → إشعار التغيير
+    - لم يتغير → لا شيء
     """
-    if not rw_record:
-        return
-    current_str = str(rw_record)
-    prev = get_rw_snapshot(order_id)
+    snap_key    = f"rw_snap_{order_id}"
+    current_str = _rw_record_to_str(rw_record)  # "" لو مفيش سجل
+    prev        = st.session_state.get(snap_key, None)
+
+    # أول مرة نشوف هذا الطلب في الجلسة
     if prev is None:
-        save_rw_snapshot(order_id, current_str)
+        st.session_state[snap_key] = current_str
+        # لو في سجل ظهر أول مرة → إشعار
+        if current_str:
+            add_rw_notification(
+                order_id=order_id,
+                comp_type=comp_type,
+                field_label="ReturnWarehouse",
+                before="لم يكن موجوداً",
+                after=current_str
+            )
         return
-    if prev != current_str:
-        add_rw_notification(
-            order_id=order_id,
-            comp_type=comp_type,
-            field_label="ReturnWarehouse",
-            before=prev,
-            after=current_str
-        )
-        save_rw_snapshot(order_id, current_str)
+
+    # لم يتغير شيء
+    if prev == current_str:
+        return
+
+    # تحديد نوع التغيير
+    if not prev and current_str:
+        before_label = "لم يكن موجوداً"
+        after_label  = current_str
+    elif prev and not current_str:
+        before_label = prev
+        after_label  = "اختفى من المخزن"
+    else:
+        before_label = prev
+        after_label  = current_str
+
+    add_rw_notification(
+        order_id=order_id,
+        comp_type=comp_type,
+        field_label="ReturnWarehouse",
+        before=before_label,
+        after=after_label
+    )
+    st.session_state[snap_key] = current_str
 
 
 # ─────────────────────────────────────────────
@@ -520,19 +567,23 @@ def safe_delete(sheet, row_index, retries=5, delay=1):
     st.error("❌ فشل delete_rows بعد عدة محاولات.")
     return False
 
-# ====== تحميل الأنواع ومصادر البيانات ======
+# ====== تحميل الأنواع ======
 try:
     types_list = [row[0] for row in types_sheet.get_all_values()[1:]]
 except Exception:
     types_list = []
 
-try:
-    return_warehouse_data = return_warehouse_sheet.get_all_values()[1:]
-except Exception:
-    return_warehouse_data = []
+# ====== ReturnWarehouse — محدَّث دايماً (cached 30 ث) ======
+@st.cache_data(ttl=30)
+def get_return_warehouse_data():
+    try:
+        return return_warehouse_sheet.get_all_values()[1:]
+    except Exception:
+        return []
 
 def get_returnwarehouse_record(order_id):
-    for row in return_warehouse_data:
+    data = get_return_warehouse_data()
+    for row in data:
         if len(row) > 0 and str(row[0]) == str(order_id):
             return {
                 "رقم الطلب":  row[0],
@@ -545,6 +596,7 @@ def get_returnwarehouse_record(order_id):
             }
     return None
 
+# ====== Order Number ======
 try:
     order_number_data = order_number_sheet.get_all_values()[1:]
 except Exception:
@@ -680,7 +732,8 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
                     f"رقم الشحنة: {rw_record['رقم الشحنة']}\n"
                     f"البيان: {rw_record['البيان']}"
                 )
-                check_and_notify_rw_change(comp_id, comp_type, rw_record)
+            # نمرر سواء كان None أو فيه بيانات — الدالة تتعامل مع الحالتين
+            check_and_notify_rw_change(comp_id, comp_type, rw_record)
 
             new_type     = st.selectbox("✏️ عدل نوع الشكوى",
                                         [comp_type] + [t for t in types_list if t != comp_type])
