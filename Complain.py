@@ -13,13 +13,12 @@ from streamlit_autorefresh import st_autorefresh
 # ====== تحديث تلقائي كل 20 دقيقة ======
 st_autorefresh(interval=1200000, key="auto_refresh")
 
-# ====== إعدادات الصفحة (لازم تكون أول حاجة) ======
+# ====== إعدادات الصفحة ======
 st.set_page_config(page_title="📢 نظام الشكاوى", page_icon="⚠️", layout="wide")
 
 
 # ==============================================================
-# 🔌 الاتصال بجوجل شيت - مرة واحدة فقط طوال عمر التطبيق
-# بدل ما يتوصل كل rerun - FIX: كان خارج cache
+# 🔌 الاتصال بجوجل شيت
 # ==============================================================
 
 @st.cache_resource
@@ -35,7 +34,8 @@ def _get_sheets():
         "Complaints", "Responded", "Archive", "Types",
         "معلق ارامكس", "أرشيف أرامكس", "ReturnWarehouse", "Order Number",
         "Notifications", "AramexNotifications", "RWNotifications",
-        "Snapshots"
+        "AramexSnapshots",   # ✅ سناب شوت مخصص لأرامكس
+        "RWSnapshots",       # ✅ سناب شوت مخصص للمخزن
     ]
     d = {}
     ss = gspread_client.open(SHEET_NAME)
@@ -59,17 +59,20 @@ order_number_sheet      = sheets_dict["Order Number"]
 notifications_sheet     = sheets_dict["Notifications"]
 aramex_notif_sheet      = sheets_dict["AramexNotifications"]
 rw_notif_sheet          = sheets_dict["RWNotifications"]
-snapshots_sheet         = sheets_dict["Snapshots"]
+aramex_snapshots_sheet  = sheets_dict["AramexSnapshots"]   # ✅ جديد
+rw_snapshots_sheet      = sheets_dict["RWSnapshots"]       # ✅ جديد
 
 
 # ==============================================================
-# 📸 نظام Snapshots
+# 📸 نظام Snapshots - مكتبة عامة قابلة للاستخدام لأي شيت
 # ==============================================================
 
 @st.cache_data(ttl=30)
-def _load_all_snapshots():
+def _load_snapshots_from(sheet_title: str):
+    """يجلب كل السناب شوت من شيت معين ويرجع (dict key→value, dict key→row_index)"""
+    sheet = sheets_dict[sheet_title]
     try:
-        data = snapshots_sheet.get_all_values()
+        data = sheet.get_all_values()
         result = {}
         row_index = {}
         for idx, row in enumerate(data[1:], start=2):
@@ -81,24 +84,39 @@ def _load_all_snapshots():
         return {}, {}
 
 
-def snap_get(key: str):
-    cache, _ = _load_all_snapshots()
+def _snap_get(sheet_title: str, key: str):
+    cache, _ = _load_snapshots_from(sheet_title)
     return cache.get(key, None)
 
 
-def snap_set(key: str, value: str):
+def _snap_set(sheet_title: str, key: str, value: str):
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    _, row_index = _load_all_snapshots()
+    sheet = sheets_dict[sheet_title]
+    _, row_index = _load_snapshots_from(sheet_title)
     try:
         idx = row_index.get(key)
         if idx:
-            snapshots_sheet.update(f"B{idx}", [[value]])
-            snapshots_sheet.update(f"C{idx}", [[now]])
+            sheet.update(f"B{idx}", [[value]])
+            sheet.update(f"C{idx}", [[now]])
         else:
-            snapshots_sheet.append_row([key, value, now])
-        _load_all_snapshots.clear()
+            sheet.append_row([key, value, now])
+        _load_snapshots_from.clear()
     except Exception:
         pass
+
+
+# دوال مختصرة لكل نوع
+def aramex_snap_get(key: str):
+    return _snap_get("AramexSnapshots", key)
+
+def aramex_snap_set(key: str, value: str):
+    _snap_set("AramexSnapshots", key, value)
+
+def rw_snap_get(key: str):
+    return _snap_get("RWSnapshots", key)
+
+def rw_snap_set(key: str, value: str):
+    _snap_set("RWSnapshots", key, value)
 
 
 # ==============================================================
@@ -183,34 +201,37 @@ def add_rw_notification(order_id, comp_type, before, after):
 
 
 # ==============================================================
-# 🔄 كشف التغييرات - AWB أرامكس
-# FIX: snap_key الآن يتضمن نوع المصدر (complaint/pending)
-# عشان ما يتعارضوا مع بعض
+# 🔄 كشف تغييرات أرامكس - AWB Outbound / Inbound
+# ✅ يستخدم AramexSnapshots حصرياً
+# snap_key = "awb__{source}__{awb}"   (مثال: awb__complaint__12345678)
 # ==============================================================
 
 def check_and_notify_aramex_change(order_id, comp_type, awb, current_status,
                                    label_prefix="AWB", source="complaint"):
     """
-    source: "complaint" أو "pending" - يُفرّق بين الشكاوى والمعلق
+    source: "complaint" | "pending"
+    يحفظ/يقرأ من AramexSnapshots فقط - منفصل تماماً عن المخزن
     """
     if not awb or not str(awb).strip():
         return
     if _is_error_status(current_status):
         return
 
-    # FIX: إضافة source في الـ key عشان ما يتعارض
-    snap_key = f"awb_{source}_{awb}"
-    prev = snap_get(snap_key)
+    snap_key = f"awb__{source}__{awb.strip()}"
+    prev = aramex_snap_get(snap_key)
 
     if prev is None:
-        snap_set(snap_key, current_status)
+        # أول مرة → احفظ بدون إشعار
+        aramex_snap_set(snap_key, current_status)
         return
 
     if _is_error_status(prev):
-        snap_set(snap_key, current_status)
+        # كانت خطأ سابقاً → حدّث بدون إشعار
+        aramex_snap_set(snap_key, current_status)
         return
 
     if prev.strip() != current_status.strip():
+        # ✅ تغيير حقيقي → أرسل إشعار
         add_aramex_notification(
             order_id=order_id,
             comp_type=comp_type,
@@ -218,13 +239,12 @@ def check_and_notify_aramex_change(order_id, comp_type, awb, current_status,
             before=prev,
             after=current_status
         )
-        snap_set(snap_key, current_status)
+        aramex_snap_set(snap_key, current_status)
 
 
 # ==============================================================
-# 🔄 كشف التغييرات - ReturnWarehouse
-# FIX: لا يرسل إشعار "جديد في المخزن" إلا لو في تغيير حقيقي
-# (أول مرة بدون بيانات → يحفظ بدون إشعار)
+# 🔄 كشف تغييرات ReturnWarehouse
+# ✅ يستخدم RWSnapshots حصرياً
 # ==============================================================
 
 def _rw_to_str(rw_record) -> str:
@@ -243,20 +263,20 @@ def _rw_to_str(rw_record) -> str:
 
 def check_and_notify_rw_change(order_id, comp_type, rw_record):
     """
-    FIX الرئيسي:
+    يحفظ/يقرأ من RWSnapshots فقط - منفصل تماماً عن أرامكس
     - أول مرة بدون بيانات → يحفظ "" بدون إشعار
-    - أول مرة مع بيانات → إشعار "ظهر في المخزن" (مش "جديد" دايماً)
-    - تغيير من "" إلى بيانات → إشعار
-    - تغيير بين بيانات → إشعار
-    - لا تغيير → لا شيء
+    - أول مرة مع بيانات   → يحفظ بدون إشعار (لحماية من الـ false positives)
+    - تغيير من "" → بيانات → إشعار "ظهر في المخزن"
+    - تغيير بين بيانات    → إشعار بالتغيير
+    - لا تغيير             → لا شيء
     """
-    snap_key = f"rw_{order_id}"
+    snap_key = f"rw__{order_id}"
     current_str = _rw_to_str(rw_record)
-    prev = snap_get(snap_key)
+    prev = rw_snap_get(snap_key)
 
     if prev is None:
-        # أول مرة - حفظ بدون إشعار مهما كانت القيمة
-        snap_set(snap_key, current_str)
+        # أول مرة → احفظ بدون إشعار مهما كانت القيمة
+        rw_snap_set(snap_key, current_str)
         return
 
     if prev == current_str:
@@ -270,7 +290,7 @@ def check_and_notify_rw_change(order_id, comp_type, rw_record):
     else:
         add_rw_notification(order_id, comp_type, prev, current_str)
 
-    snap_set(snap_key, current_str)
+    rw_snap_set(snap_key, current_str)
 
 
 # ==============================================================
@@ -581,7 +601,6 @@ def safe_delete(sheet, row_index, retries=5, delay=1):
 
 
 # ====== تحميل الأنواع ======
-# FIX: داخل cache عشان ما يتسحب كل rerun
 @st.cache_data(ttl=120)
 def _load_types():
     try:
@@ -617,7 +636,6 @@ def get_returnwarehouse_record(order_id):
 
 
 # ====== Order Number ======
-# FIX: داخل cache بدل ما يُسحب مباشرة كل rerun
 @st.cache_data(ttl=120)
 def _load_order_numbers():
     try:
@@ -764,8 +782,7 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
                     f"رقم الشحنة: {rw_record['رقم الشحنة']}\n"
                     f"البيان: {rw_record['البيان']}"
                 )
-            # FIX: check_and_notify_rw_change تشتغل دايماً (حتى لو مفيش record)
-            # عشان تحفظ الـ snapshot الأول
+            # ✅ كشف تغيير المخزن - يشتغل دايماً
             check_and_notify_rw_change(comp_id, comp_type, rw_record)
 
             new_type     = st.selectbox("✏️ عدل نوع الشكوى",
@@ -776,21 +793,28 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
             new_inbound  = st.text_input("✏️ Inbound AWB",   value=inbound_awb)
 
             # ── أرامكس - عرض + كشف تغيير ──
-            # FIX: source="complaint" عشان يتفرق عن معلق أرامكس
-            if new_outbound:
-                s_out = cached_aramex_status(new_outbound)
-                if s_out:
+            # ✅ يستخدم AramexSnapshots حصرياً عبر check_and_notify_aramex_change
+            if new_outbound.strip():
+                s_out = cached_aramex_status(new_outbound.strip())
+                if s_out and not _is_error_status(s_out):
                     st.info(f"🚚 Outbound: {new_outbound} | {s_out}")
-                    check_and_notify_aramex_change(comp_id, comp_type, new_outbound,
-                                                   s_out, label_prefix="Outbound AWB",
-                                                   source="complaint")
-            if new_inbound:
-                s_in = cached_aramex_status(new_inbound)
-                if s_in:
+                    check_and_notify_aramex_change(
+                        comp_id, comp_type, new_outbound.strip(),
+                        s_out, label_prefix="Outbound AWB", source="complaint"
+                    )
+                elif s_out:
+                    st.warning(f"⚠️ Outbound: {s_out}")
+
+            if new_inbound.strip():
+                s_in = cached_aramex_status(new_inbound.strip())
+                if s_in and not _is_error_status(s_in):
                     st.info(f"📦 Inbound: {new_inbound} | {s_in}")
-                    check_and_notify_aramex_change(comp_id, comp_type, new_inbound,
-                                                   s_in, label_prefix="Inbound AWB",
-                                                   source="complaint")
+                    check_and_notify_aramex_change(
+                        comp_id, comp_type, new_inbound.strip(),
+                        s_in, label_prefix="Inbound AWB", source="complaint"
+                    )
+                elif s_in:
+                    st.warning(f"⚠️ Inbound: {s_in}")
 
             col1, col2, col3, col4 = st.columns(4)
             btn_save    = col1.form_submit_button("💾 حفظ")
@@ -806,7 +830,16 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
                 safe_update(sheet, f"D{i}", [[new_action]])
                 safe_update(sheet, f"G{i}", [[new_outbound]])
                 safe_update(sheet, f"H{i}", [[new_inbound]])
-                add_notification(comp_id, "تعديل", "تم تعديل الشكوى", comp_type=new_type)
+                # ✅ إشعار يتضمن ما تغير
+                changes = []
+                if new_type != comp_type:
+                    changes.append(f"النوع: {comp_type} ← {new_type}")
+                if new_notes != notes:
+                    changes.append(f"ملاحظات: {new_notes[:60]}")
+                if new_action != action:
+                    changes.append(f"إجراء: {new_action[:60]}")
+                msg = "تم تعديل الشكوى" + (f" | {' | '.join(changes)}" if changes else "")
+                add_notification(comp_id, "تعديل", msg, comp_type=new_type)
                 st.success("✅ تم التعديل")
 
             if btn_delete:
@@ -829,8 +862,11 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
                                    [comp_id, new_type, new_notes, new_action,
                                     date_added, restored, new_outbound, new_inbound]):
                         if safe_delete(sheet, i):
-                            add_notification(comp_id, "المردودة",
-                                             "تم نقل الشكوى للمردودة", comp_type=new_type)
+                            # ✅ إشعار يحمل الإجراء المُضاف
+                            move_msg = "تم نقل الشكوى للمردودة"
+                            if new_action.strip():
+                                move_msg += f" | الإجراء: {new_action[:80]}"
+                            add_notification(comp_id, "المردودة", move_msg, comp_type=new_type)
                             st.success("✅ انتقلت للمردودة")
                 else:
                     if safe_append(complaints_sheet,
@@ -925,7 +961,8 @@ with st.form("add_complaint", clear_on_submit=True):
                                     date_now, "", outbound_awb, inbound_awb]):
                         st.success("✅ تم تسجيل الشكوى في المردودة")
                         add_notification(comp_id, "إضافة",
-                                         "تم تسجيل الشكوى في المردودة", comp_type=comp_type)
+                                         f"تم تسجيل الشكوى في المردودة | الإجراء: {action[:80]}",
+                                         comp_type=comp_type)
                 else:
                     if safe_append(complaints_sheet,
                                    [comp_id, comp_type, notes, "",
@@ -1022,13 +1059,14 @@ if len(aramex_pending) > 1:
             st.write(f"✅ الإجراء: {p_action}")
             st.caption(f"📅 {p_date}")
 
-            # FIX: source="pending" عشان snap key يكون مختلف عن الشكاوى
+            # ✅ source="pending" → snap key مختلف عن الشكاوى
             cur = cached_aramex_status(p_id)
             if cur and not _is_error_status(cur):
                 st.info(f"🚚 حالة أرامكس الآن: {cur}")
-                check_and_notify_aramex_change(p_id, "معلق أرامكس", p_id,
-                                               cur, label_prefix="AWB",
-                                               source="pending")
+                check_and_notify_aramex_change(
+                    p_id, "معلق أرامكس", p_id,
+                    cur, label_prefix="AWB", source="pending"
+                )
             elif cur:
                 st.warning(f"⚠️ {cur}")
 
@@ -1046,7 +1084,8 @@ if len(aramex_pending) > 1:
                     if ns != p_status and not _is_error_status(ns) and not _is_error_status(p_status):
                         add_aramex_notification(p_id, "معلق أرامكس",
                                                 f"AWB: {p_id}", p_status, ns)
-                    add_notification(p_id, "أرامكس", "تم تعديل الطلب")
+                    add_notification(p_id, "أرامكس",
+                                     f"تم تعديل الطلب | الإجراء: {na[:80]}")
                     st.success("تم التعديل")
 
                 if b_del:
