@@ -67,7 +67,7 @@ rw_snapshots_sheet      = sheets_dict["RWSnapshots"]
 # 📸 نظام Snapshots
 # ==============================================================
 
-
+@st.cache_data(ttl=30)
 def _load_snapshots_from(sheet_title: str):
     sheet = sheets_dict[sheet_title]
     try:
@@ -159,21 +159,16 @@ def _is_error_status(value) -> bool:
 
 def add_notification(order_id, section, message, comp_type=""):
     guard_key = f"gen|{order_id}|{section}|{message}"
-
-    if _was_notif_written_recently(guard_key, minutes=2):
+    if _was_notif_written_recently(guard_key):
         return
-
     _mark_notif_written(guard_key)
-
     try:
         notifications_sheet.append_row([
             str(order_id), str(comp_type), str(section), str(message),
             datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "NEW"
         ])
-
         get_notifications.clear()
-        st.session_state["_new_notif_this_run"] = True
-
+        st.session_state["_new_notif_this_run"] = True  # ✅ FIX
     except Exception:
         pass
 
@@ -194,26 +189,22 @@ def add_aramex_notification(order_id, comp_type, awb, before, after):
         pass
 
 
-
 def add_rw_notification(order_id, comp_type, before, after):
     guard_key = f"rw|{order_id}|{before[:30]}|{after[:30]}"
-
     if _was_notif_written_recently(guard_key, minutes=10):
         return
-
     _mark_notif_written(guard_key)
-
     try:
         rw_notif_sheet.append_row([
             str(order_id), str(comp_type), "ReturnWarehouse", str(before), str(after),
             datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "NEW"
         ])
-
         get_rw_notifications.clear()
-        st.session_state["_new_notif_this_run"] = True
-
+        st.session_state["_new_notif_this_run"] = True  # ✅ FIX
     except Exception:
         pass
+
+
 # ==============================================================
 # 🔄 كشف تغييرات أرامكس
 # ==============================================================
@@ -222,7 +213,6 @@ def check_and_notify_aramex_change(order_id, comp_type, awb, current_status,
                                    label_prefix="AWB", source="complaint"):
     if not awb or not str(awb).strip():
         return
-
     if _is_error_status(current_status):
         return
 
@@ -237,7 +227,6 @@ def check_and_notify_aramex_change(order_id, comp_type, awb, current_status,
         aramex_snap_set(snap_key, current_status)
         return
 
-    # 🔥 هنا التغيير الحقيقي
     if prev.strip() != current_status.strip():
         add_aramex_notification(
             order_id=order_id,
@@ -292,8 +281,8 @@ def check_and_notify_rw_change(order_id, comp_type, rw_record):
 # ==============================================================
 # 📊 جلب الإشعارات من الشيت
 # ==============================================================
- 
-@st.cache_data(ttl=15)
+
+@st.cache_data(ttl=10)
 def get_notifications():
     try:
         data = notifications_sheet.get_all_values()
@@ -302,7 +291,7 @@ def get_notifications():
         return []
 
 
-@st.cache_data(ttl=15)
+@st.cache_data(ttl=10)
 def get_aramex_notifications():
     try:
         data = aramex_notif_sheet.get_all_values()
@@ -311,7 +300,7 @@ def get_aramex_notifications():
         return []
 
 
-@st.cache_data(ttl=15)
+@st.cache_data(ttl=10)
 def get_rw_notifications():
     try:
         data = rw_notif_sheet.get_all_values()
