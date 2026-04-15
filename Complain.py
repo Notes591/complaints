@@ -13,53 +13,61 @@ from streamlit_autorefresh import st_autorefresh
 # ====== تحديث تلقائي كل 20 دقيقة ======
 st_autorefresh(interval=1200000, key="auto_refresh")
 
-# ====== الاتصال بجوجل شيت ======
-scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-creds_dict = st.secrets["gcp_service_account"]
-creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-client = gspread.authorize(creds)
-
-# ====== أوراق جوجل شيت ======
-SHEET_NAME = "Complaints"
-sheet_titles = [
-    "Complaints", "Responded", "Archive", "Types",
-    "معلق ارامكس", "أرشيف أرامكس", "ReturnWarehouse", "Order Number",
-    "Notifications", "AramexNotifications", "RWNotifications",
-    "Snapshots"
-]
-
-sheets_dict = {}
-for title in sheet_titles:
-    try:
-        sheets_dict[title] = client.open(SHEET_NAME).worksheet(title)
-    except Exception:
-        ss = client.open(SHEET_NAME)
-        sheets_dict[title] = ss.add_worksheet(title=title, rows="2000", cols="10")
-
-complaints_sheet       = sheets_dict["Complaints"]
-responded_sheet        = sheets_dict["Responded"]
-archive_sheet          = sheets_dict["Archive"]
-types_sheet            = sheets_dict["Types"]
-aramex_sheet           = sheets_dict["معلق ارامكس"]
-aramex_archive         = sheets_dict["أرشيف أرامكس"]
-return_warehouse_sheet = sheets_dict["ReturnWarehouse"]
-order_number_sheet     = sheets_dict["Order Number"]
-notifications_sheet    = sheets_dict["Notifications"]
-aramex_notif_sheet     = sheets_dict["AramexNotifications"]
-rw_notif_sheet         = sheets_dict["RWNotifications"]
-snapshots_sheet        = sheets_dict["Snapshots"]
-
-# ====== إعدادات الصفحة ======
+# ====== إعدادات الصفحة (لازم تكون أول حاجة) ======
 st.set_page_config(page_title="📢 نظام الشكاوى", page_icon="⚠️", layout="wide")
 
 
 # ==============================================================
-# 📸 نظام Snapshots - يقرأ ويكتب في Google Sheets مباشرة
+# 🔌 الاتصال بجوجل شيت - مرة واحدة فقط طوال عمر التطبيق
+# بدل ما يتوصل كل rerun - FIX: كان خارج cache
+# ==============================================================
+
+@st.cache_resource
+def _get_sheets():
+    scope = ["https://www.googleapis.com/auth/spreadsheets",
+             "https://www.googleapis.com/auth/drive"]
+    creds_dict = st.secrets["gcp_service_account"]
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+    gspread_client = gspread.authorize(creds)
+
+    SHEET_NAME = "Complaints"
+    sheet_titles = [
+        "Complaints", "Responded", "Archive", "Types",
+        "معلق ارامكس", "أرشيف أرامكس", "ReturnWarehouse", "Order Number",
+        "Notifications", "AramexNotifications", "RWNotifications",
+        "Snapshots"
+    ]
+    d = {}
+    ss = gspread_client.open(SHEET_NAME)
+    for title in sheet_titles:
+        try:
+            d[title] = ss.worksheet(title)
+        except Exception:
+            d[title] = ss.add_worksheet(title=title, rows="2000", cols="10")
+    return d
+
+
+sheets_dict             = _get_sheets()
+complaints_sheet        = sheets_dict["Complaints"]
+responded_sheet         = sheets_dict["Responded"]
+archive_sheet           = sheets_dict["Archive"]
+types_sheet             = sheets_dict["Types"]
+aramex_sheet            = sheets_dict["معلق ارامكس"]
+aramex_archive          = sheets_dict["أرشيف أرامكس"]
+return_warehouse_sheet  = sheets_dict["ReturnWarehouse"]
+order_number_sheet      = sheets_dict["Order Number"]
+notifications_sheet     = sheets_dict["Notifications"]
+aramex_notif_sheet      = sheets_dict["AramexNotifications"]
+rw_notif_sheet          = sheets_dict["RWNotifications"]
+snapshots_sheet         = sheets_dict["Snapshots"]
+
+
+# ==============================================================
+# 📸 نظام Snapshots
 # ==============================================================
 
 @st.cache_data(ttl=30)
 def _load_all_snapshots():
-    """يحمّل كل الـ snapshots من الشيت - مع cache قصير."""
     try:
         data = snapshots_sheet.get_all_values()
         result = {}
@@ -74,13 +82,11 @@ def _load_all_snapshots():
 
 
 def snap_get(key: str):
-    """يجلب قيمة snapshot من الـ cache."""
     cache, _ = _load_all_snapshots()
     return cache.get(key, None)
 
 
 def snap_set(key: str, value: str):
-    """يحفظ snapshot في الشيت ويصفّر الـ cache."""
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     _, row_index = _load_all_snapshots()
     try:
@@ -90,7 +96,6 @@ def snap_set(key: str, value: str):
             snapshots_sheet.update(f"C{idx}", [[now]])
         else:
             snapshots_sheet.append_row([key, value, now])
-        # صفّر الـ cache عشان التغيير يظهر فوراً
         _load_all_snapshots.clear()
     except Exception:
         pass
@@ -98,7 +103,6 @@ def snap_set(key: str, value: str):
 
 # ==============================================================
 # 🛡️ Guard - يمنع كتابة نفس الإشعار مرتين في نفس الـ session
-# يُحفظ في session_state مع timestamp
 # ==============================================================
 
 def _init_notif_guard():
@@ -109,12 +113,10 @@ _init_notif_guard()
 
 
 def _was_notif_written_recently(key: str, minutes: int = 5) -> bool:
-    """يتحقق إذا الإشعار اتكتب خلال آخر X دقيقة في هذا الـ session."""
     guard = st.session_state["_notif_written"]
     if key not in guard:
         return False
-    written_at = guard[key]
-    elapsed = (datetime.now() - written_at).total_seconds() / 60
+    elapsed = (datetime.now() - guard[key]).total_seconds() / 60
     return elapsed < minutes
 
 
@@ -123,7 +125,6 @@ def _mark_notif_written(key: str):
 
 
 def _is_error_status(value) -> bool:
-    """يكشف إذا القيمة ناتجة عن خطأ."""
     if not value or not str(value).strip():
         return True
     v = str(value)
@@ -133,11 +134,10 @@ def _is_error_status(value) -> bool:
 
 
 # ==============================================================
-# 🔔 دوال كتابة الإشعارات - مع حماية من التكرار
+# 🔔 دوال كتابة الإشعارات
 # ==============================================================
 
 def add_notification(order_id, section, message, comp_type=""):
-    """إشعار عام."""
     guard_key = f"gen|{order_id}|{section}|{message}"
     if _was_notif_written_recently(guard_key):
         return
@@ -153,7 +153,6 @@ def add_notification(order_id, section, message, comp_type=""):
 
 
 def add_aramex_notification(order_id, comp_type, awb, before, after):
-    """إشعار تغيير AWB."""
     guard_key = f"aramex|{order_id}|{awb}|{before[:30]}|{after[:30]}"
     if _was_notif_written_recently(guard_key, minutes=10):
         return
@@ -169,7 +168,6 @@ def add_aramex_notification(order_id, comp_type, awb, before, after):
 
 
 def add_rw_notification(order_id, comp_type, before, after):
-    """إشعار تغيير ReturnWarehouse."""
     guard_key = f"rw|{order_id}|{before[:30]}|{after[:30]}"
     if _was_notif_written_recently(guard_key, minutes=10):
         return
@@ -186,36 +184,33 @@ def add_rw_notification(order_id, comp_type, before, after):
 
 # ==============================================================
 # 🔄 كشف التغييرات - AWB أرامكس
+# FIX: snap_key الآن يتضمن نوع المصدر (complaint/pending)
+# عشان ما يتعارضوا مع بعض
 # ==============================================================
 
-def check_and_notify_aramex_change(order_id, comp_type, awb, current_status, label_prefix="AWB"):
+def check_and_notify_aramex_change(order_id, comp_type, awb, current_status,
+                                   label_prefix="AWB", source="complaint"):
     """
-    يقارن حالة AWB الحالية بآخر حالة في Snapshots.
-    - لو الحالة خطأ → يتجاهل
-    - لو أول مرة → يحفظ بدون إشعار
-    - لو كانت خطأ وبقت صحيحة → يحدّث بدون إشعار
-    - لو تغيرت بين قيمتين صحيحتين → إشعار
+    source: "complaint" أو "pending" - يُفرّق بين الشكاوى والمعلق
     """
     if not awb or not str(awb).strip():
         return
     if _is_error_status(current_status):
         return
 
-    snap_key = f"awb_{awb}"
+    # FIX: إضافة source في الـ key عشان ما يتعارض
+    snap_key = f"awb_{source}_{awb}"
     prev = snap_get(snap_key)
 
     if prev is None:
-        # أول تسجيل - احفظ بدون إشعار
         snap_set(snap_key, current_status)
         return
 
     if _is_error_status(prev):
-        # كانت خطأ وبقت صح - حدّث بدون إشعار
         snap_set(snap_key, current_status)
         return
 
     if prev.strip() != current_status.strip():
-        # تغيير حقيقي!
         add_aramex_notification(
             order_id=order_id,
             comp_type=comp_type,
@@ -228,10 +223,11 @@ def check_and_notify_aramex_change(order_id, comp_type, awb, current_status, lab
 
 # ==============================================================
 # 🔄 كشف التغييرات - ReturnWarehouse
+# FIX: لا يرسل إشعار "جديد في المخزن" إلا لو في تغيير حقيقي
+# (أول مرة بدون بيانات → يحفظ بدون إشعار)
 # ==============================================================
 
 def _rw_to_str(rw_record) -> str:
-    """يحوّل سجل RW لـ string للمقارنة."""
     if not rw_record:
         return ""
     return (
@@ -247,29 +243,28 @@ def _rw_to_str(rw_record) -> str:
 
 def check_and_notify_rw_change(order_id, comp_type, rw_record):
     """
-    يقارن سجل ReturnWarehouse الحالي بالمحفوظ في Snapshots.
-    - أول مرة + فيه بيانات → إشعار "سجل جديد في المخزن"
-    - أول مرة + فاضي → يحفظ بدون إشعار
-    - تغيير حقيقي → إشعار
+    FIX الرئيسي:
+    - أول مرة بدون بيانات → يحفظ "" بدون إشعار
+    - أول مرة مع بيانات → إشعار "ظهر في المخزن" (مش "جديد" دايماً)
+    - تغيير من "" إلى بيانات → إشعار
+    - تغيير بين بيانات → إشعار
+    - لا تغيير → لا شيء
     """
     snap_key = f"rw_{order_id}"
     current_str = _rw_to_str(rw_record)
     prev = snap_get(snap_key)
 
     if prev is None:
-        # أول مرة نشوف هذا الطلب
-        if current_str:
-            add_rw_notification(order_id, comp_type, "جديد في المخزن", current_str)
+        # أول مرة - حفظ بدون إشعار مهما كانت القيمة
         snap_set(snap_key, current_str)
         return
 
     if prev == current_str:
-        # لم يتغير شيء
         return
 
     # تغيير حقيقي
     if not prev and current_str:
-        add_rw_notification(order_id, comp_type, "لم يكن موجوداً", current_str)
+        add_rw_notification(order_id, comp_type, "لم يكن موجوداً في المخزن", current_str)
     elif prev and not current_str:
         add_rw_notification(order_id, comp_type, prev, "اختفى من المخزن")
     else:
@@ -314,7 +309,6 @@ def get_rw_notifications():
 # ==============================================================
 
 def _mark_all_read(sheet, status_col_index: int):
-    """يعلّم كل الـ NEW → READ في الشيت."""
     try:
         data = sheet.get_all_values()
         col = chr(ord('A') + status_col_index)
@@ -332,7 +326,6 @@ def _mark_all_read(sheet, status_col_index: int):
 
 
 def _delete_read_rows(sheet, status_col_index: int):
-    """يحذف الصفوف READ نهائياً."""
     try:
         data = sheet.get_all_values()
         to_del = [
@@ -464,7 +457,7 @@ def _render_rw_notif(n):
 
 
 # ==============================================================
-# 🔔 لوحة الإشعارات (3 أعمدة)
+# 🔔 لوحة الإشعارات
 # ==============================================================
 
 def render_notifications_panel():
@@ -588,10 +581,15 @@ def safe_delete(sheet, row_index, retries=5, delay=1):
 
 
 # ====== تحميل الأنواع ======
-try:
-    types_list = [row[0] for row in types_sheet.get_all_values()[1:]]
-except Exception:
-    types_list = []
+# FIX: داخل cache عشان ما يتسحب كل rerun
+@st.cache_data(ttl=120)
+def _load_types():
+    try:
+        return [row[0] for row in types_sheet.get_all_values()[1:] if row and row[0]]
+    except Exception:
+        return []
+
+types_list = _load_types()
 
 
 # ====== ReturnWarehouse ======
@@ -619,14 +617,17 @@ def get_returnwarehouse_record(order_id):
 
 
 # ====== Order Number ======
-try:
-    order_number_data = order_number_sheet.get_all_values()[1:]
-except Exception:
-    order_number_data = []
+# FIX: داخل cache بدل ما يُسحب مباشرة كل rerun
+@st.cache_data(ttl=120)
+def _load_order_numbers():
+    try:
+        return order_number_sheet.get_all_values()[1:]
+    except Exception:
+        return []
 
 
 def get_order_status(order_id):
-    for row in order_number_data:
+    for row in _load_order_numbers():
         if len(row) > 1 and str(row[1]) == str(order_id):
             delegate = row[3] if len(row) > 3 else ""
             if delegate.strip().lower() == "aramex":
@@ -640,12 +641,12 @@ def get_order_status(order_id):
 
 # ====== Aramex API ======
 client_info = {
-    "UserName": "fitnessworld525@gmail.com",
-    "Password": "Aa12345678@",
-    "Version": "v1",
-    "AccountNumber": "71958996",
-    "AccountPin": "657448",
-    "AccountEntity": "RUH",
+    "UserName":           st.secrets.get("aramex_username", "fitnessworld525@gmail.com"),
+    "Password":           st.secrets.get("aramex_password", "Aa12345678@"),
+    "Version":            "v1",
+    "AccountNumber":      "71958996",
+    "AccountPin":         "657448",
+    "AccountEntity":      "RUH",
     "AccountCountryCode": "SA"
 }
 
@@ -665,7 +666,6 @@ def extract_reference(tracking_result):
 
 
 def get_aramex_status(awb_number):
-    """يجلب حالة الشحنة من API أرامكس مباشرة."""
     try:
         payload = {
             "ClientInfo": client_info,
@@ -719,10 +719,6 @@ def get_aramex_status(awb_number):
 
 @st.cache_data(ttl=300)
 def cached_aramex_status(awb):
-    """
-    cache لمدة 5 دقائق - لكن نحن نستخدم snap_get/snap_set
-    لكشف التغييرات بشكل مستقل عن الـ cache.
-    """
     if not awb or not str(awb).strip():
         return ""
     return get_aramex_status(awb)
@@ -768,6 +764,8 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
                     f"رقم الشحنة: {rw_record['رقم الشحنة']}\n"
                     f"البيان: {rw_record['البيان']}"
                 )
+            # FIX: check_and_notify_rw_change تشتغل دايماً (حتى لو مفيش record)
+            # عشان تحفظ الـ snapshot الأول
             check_and_notify_rw_change(comp_id, comp_type, rw_record)
 
             new_type     = st.selectbox("✏️ عدل نوع الشكوى",
@@ -778,18 +776,21 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
             new_inbound  = st.text_input("✏️ Inbound AWB",   value=inbound_awb)
 
             # ── أرامكس - عرض + كشف تغيير ──
+            # FIX: source="complaint" عشان يتفرق عن معلق أرامكس
             if new_outbound:
                 s_out = cached_aramex_status(new_outbound)
                 if s_out:
                     st.info(f"🚚 Outbound: {new_outbound} | {s_out}")
                     check_and_notify_aramex_change(comp_id, comp_type, new_outbound,
-                                                   s_out, label_prefix="Outbound AWB")
+                                                   s_out, label_prefix="Outbound AWB",
+                                                   source="complaint")
             if new_inbound:
                 s_in = cached_aramex_status(new_inbound)
                 if s_in:
                     st.info(f"📦 Inbound: {new_inbound} | {s_in}")
                     check_and_notify_aramex_change(comp_id, comp_type, new_inbound,
-                                                   s_in, label_prefix="Inbound AWB")
+                                                   s_in, label_prefix="Inbound AWB",
+                                                   source="complaint")
 
             col1, col2, col3, col4 = st.columns(4)
             btn_save    = col1.form_submit_button("💾 حفظ")
@@ -1021,12 +1022,13 @@ if len(aramex_pending) > 1:
             st.write(f"✅ الإجراء: {p_action}")
             st.caption(f"📅 {p_date}")
 
-            # جلب حالة أرامكس الحالية وكشف التغيير
+            # FIX: source="pending" عشان snap key يكون مختلف عن الشكاوى
             cur = cached_aramex_status(p_id)
             if cur and not _is_error_status(cur):
                 st.info(f"🚚 حالة أرامكس الآن: {cur}")
                 check_and_notify_aramex_change(p_id, "معلق أرامكس", p_id,
-                                               cur, label_prefix="AWB")
+                                               cur, label_prefix="AWB",
+                                               source="pending")
             elif cur:
                 st.warning(f"⚠️ {cur}")
 
@@ -1041,7 +1043,6 @@ if len(aramex_pending) > 1:
                 if b_save:
                     safe_update(aramex_sheet, f"B{i}", [[ns]])
                     safe_update(aramex_sheet, f"D{i}", [[na]])
-                    # إشعار تغيير يدوي للحالة (لو تغيرت يدوياً)
                     if ns != p_status and not _is_error_status(ns) and not _is_error_status(p_status):
                         add_aramex_notification(p_id, "معلق أرامكس",
                                                 f"AWB: {p_id}", p_status, ns)
