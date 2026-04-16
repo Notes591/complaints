@@ -52,16 +52,22 @@ notifications_sheet  = sheets_dict["Notifications"]
 # ====== إعدادات الصفحة ======
 st.set_page_config(page_title="📢 نظام الشكاوى", page_icon="⚠️", layout="wide")
 
-# ====== دوال Retry ======
-def safe_append(sheet, row_data, retries=5, delay=1):
+def safe_append(sheet, row_data, retries=5, delay=2):
     for attempt in range(retries):
         try:
             sheet.append_row(row_data)
+            time.sleep(1)  # 👈 مهم جدًا يقلل الضغط
             return True
-        except gspread.exceptions.APIError:
-            time.sleep(delay)
+
+        except gspread.exceptions.APIError as e:
+            if "429" in str(e):
+                time.sleep(delay * (attempt + 2))  # 👈 تهدئة أقوى
+            else:
+                time.sleep(delay)
+
         except Exception:
             time.sleep(delay)
+
     st.error("❌ فشل append_row بعد عدة محاولات.")
     return False
 
