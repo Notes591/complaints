@@ -101,55 +101,6 @@ try:
 except Exception:
     return_warehouse_data = []
 
-# ====== نظام إشعارات ReturnWarehouse (إضافة جديدة بدون كسر الكود) ======
-
-current_return_ids = set()
-
-for row in return_warehouse_data:
-    if len(row) > 0 and str(row[0]).strip():
-        current_return_ids.add(str(row[0]).strip())
-
-# أول تشغيل: نخزن الحالي بدون إشعارات (تجنب spam)
-if "_prev_returnwarehouse_ids" not in st.session_state:
-    st.session_state["_prev_returnwarehouse_ids"] = set(current_return_ids)
-
-# الطلبات الجديدة فقط
-new_return_ids = current_return_ids - st.session_state["_prev_returnwarehouse_ids"]
-
-# تحديث الحالة
-st.session_state["_prev_returnwarehouse_ids"] = current_return_ids
-
-# ====== فحص وجود الطلب في باقي الشيتات ======
-def check_order_exists_everywhere(order_id):
-    sheets_to_check = [
-        complaints_sheet,
-        responded_sheet,
-        archive_sheet
-    ]
-
-    for sheet in sheets_to_check:
-        try:
-            data = sheet.get_all_values()
-            for row in data[1:]:
-                if len(row) > 0 and str(row[0]).strip() == str(order_id).strip():
-                    return True, sheet.title
-        except:
-            continue
-
-    return False, None
-
-
-# ====== إشعارات مباشرة ======
-if new_return_ids:
-    for order_id in new_return_ids:
-        exists, where = check_order_exists_everywhere(order_id)
-
-        if exists:
-            st.error(f"🚨 طلب جديد في ReturnWarehouse موجود بالفعل في: {where} (رقم: {order_id})")
-        else:
-            st.warning(f"⚠️ طلب جديد في ReturnWarehouse غير موجود في الشكاوى: {order_id}")
-    
-
 def get_returnwarehouse_record(order_id):
     for row in return_warehouse_data:
         if len(row) > 0 and str(row[0]) == str(order_id):
