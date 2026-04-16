@@ -144,6 +144,22 @@ def add_rw_notification(order_id, comp_type, before, after):
     guard_key = f"rw|{order_id}|{before[:30]}|{after[:30]}"
     if _was_notif_written_recently(guard_key, minutes=10):
         return
+
+    # ✅ الإصلاح: فحص الشيت مباشرة عشان نمنع التكرار بين السيشنز المختلفة
+    try:
+        recent_rows = rw_notif_sheet.get_all_values()
+        cutoff_ts = datetime.now().timestamp() - 600  # آخر 10 دقائق
+        for row in recent_rows[-30:]:
+            if len(row) >= 6 and str(row[0]) == str(order_id) and row[3][:30] == before[:30]:
+                try:
+                    row_time = datetime.strptime(row[5], "%Y-%m-%d %H:%M:%S").timestamp()
+                    if row_time > cutoff_ts:
+                        return  # الإشعار ده اتكتب قريباً → تجاهل
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
     _mark_notif_written(guard_key)
     try:
         rw_notif_sheet.append_row([
@@ -158,9 +174,11 @@ def add_rw_notification(order_id, comp_type, before, after):
 
 # ==============================================================
 # 🔄 كشف تغييرات ReturnWarehouse
-# المنطق الجديد:
+#
+# المنطق:
 #   - مفيش سناب محفوظ  → احفظ الحالية بدون إشعار (أول مرة)
 #   - سناب محفوظ وزي بعض → لا تعمل شيء
+#   - current_str فاضي  → تجاهل (جلب ناقص مش اختفاء حقيقي) ✅ إصلاح
 #   - سناب محفوظ واختلف → إشعار + حدّث السناب
 # ==============================================================
 
@@ -179,7 +197,7 @@ def _rw_to_str(rw_record) -> str:
 
 
 def check_and_notify_rw_change(order_id, comp_type, rw_record):
-    snap_key   = f"rw__{order_id}"
+    snap_key    = f"rw__{order_id}"
     current_str = _rw_to_str(rw_record)
     prev        = rw_snap_get(snap_key)
 
@@ -192,11 +210,13 @@ def check_and_notify_rw_change(order_id, comp_type, rw_record):
     if prev == current_str:
         return
 
+    # ✅ الإصلاح الرئيسي: لو current_str فاضي → جلب ناقص مش اختفاء حقيقي، تجاهل
+    if not current_str:
+        return
+
     # في تغيير حقيقي → إشعار + تحديث السناب
     if not prev and current_str:
         add_rw_notification(order_id, comp_type, "لم يكن موجوداً في المخزن", current_str)
-    elif prev and not current_str:
-        add_rw_notification(order_id, comp_type, prev, "اختفى من المخزن")
     else:
         add_rw_notification(order_id, comp_type, prev, current_str)
 
