@@ -52,22 +52,16 @@ notifications_sheet  = sheets_dict["Notifications"]
 # ====== إعدادات الصفحة ======
 st.set_page_config(page_title="📢 نظام الشكاوى", page_icon="⚠️", layout="wide")
 
-def safe_append(sheet, row_data, retries=5, delay=2):
+# ====== دوال Retry ======
+def safe_append(sheet, row_data, retries=5, delay=1):
     for attempt in range(retries):
         try:
             sheet.append_row(row_data)
-            time.sleep(1)  # 👈 مهم جدًا يقلل الضغط
             return True
-
-        except gspread.exceptions.APIError as e:
-            if "429" in str(e):
-                time.sleep(delay * (attempt + 2))  # 👈 تهدئة أقوى
-            else:
-                time.sleep(delay)
-
+        except gspread.exceptions.APIError:
+            time.sleep(delay)
         except Exception:
             time.sleep(delay)
-
     st.error("❌ فشل append_row بعد عدة محاولات.")
     return False
 
@@ -232,86 +226,46 @@ def render_notifications_sidebar():
 # ======================================================
 # ====== مراقبة ReturnWarehouse للإشعارات التلقائية ======
 # ======================================================
-def normalize_id(val):
-    try:
-        return str(int(float(val)))
-    except:
-        return str(val).strip().replace("\xa0", "").replace(" ", "")
-
-
-def get_last_rw_id():
-    try:
-        sheet = client.open(SHEET_NAME).worksheet("SystemState")
-        data = sheet.get_all_values()
-        for row in data:
-            if row[0] == "last_rw_id":
-                return row[1]
-    except:
-        pass
-    return ""
-
-
-def set_last_rw_id(val):
-    try:
-        sheet = client.open(SHEET_NAME).worksheet("SystemState")
-        rows = sheet.get_all_values()
-        for i, row in enumerate(rows):
-            if row[0] == "last_rw_id":
-                sheet.update(f"B{i+1}", [[val]])
-                return
-    except:
-        pass
-
-
 def check_returnwarehouse_new_orders():
+    """
+    يشوف لو في طلبات جديدة في ReturnWarehouse عندها شكوى في النظام
+    ويبعت إشعار مرة واحدة بس (عن طريق تتبع آخر عدد صفوف في session_state)
+    """
     try:
         rw_data = return_warehouse_sheet.get_all_values()
+        current_count = len(rw_data) - 1  # بدون الهيدر
 
-        if len(rw_data) <= 1:
-            return
-
-        last_saved_id = normalize_id(get_last_rw_id())
-
+        # نجيب كل أرقام الطلبات في النشطة والمردودة والأرشيف
         active_ids = set()
         for sheet_obj in [complaints_sheet, responded_sheet, archive_sheet]:
             try:
                 rows = sheet_obj.get_all_values()[1:]
                 for row in rows:
-                    if row and row[0]:
-                        active_ids.add(normalize_id(row[0]))
-            except:
+                    if len(row) > 0 and row[0].strip():
+                        active_ids.add(str(row[0]).strip())
+            except Exception:
                 pass
 
-        new_last_id = None
+        # نتحقق من الصفوف الجديدة في ReturnWarehouse
+        prev_count = st.session_state.get("rw_prev_count", current_count)
 
-        for row in reversed(rw_data[1:]):
-            if not row:
-                continue
+        if current_count > prev_count:
+            # في صفوف جديدة
+            new_rows = rw_data[prev_count + 1:]  # +1 للهيدر
+            for row in new_rows:
+                if len(row) > 0:
+                    order_id = str(row[0]).strip()
+                    if order_id in active_ids:
+                        # الطلب عنده شكوى موجودة - نبعت إشعار
+                        add_notification(
+                            order_id=order_id,
+                            comp_type="ReturnWarehouse",
+                            action_done="طلب جديد في ReturnWarehouse"
+                        )
 
-            order_id = normalize_id(row[0])
-
-            if not order_id:
-                continue
-
-            if new_last_id is None:
-                new_last_id = order_id
-
-            if order_id == last_saved_id:
-                break
-
-            if order_id in active_ids:
-                time.sleep(1)
-                add_notification(
-                    order_id=order_id,
-                    comp_type="ReturnWarehouse",
-                    action_done="طلب جديد في ReturnWarehouse"
-                )
-
-        if new_last_id:
-            set_last_rw_id(new_last_id)
-
-    except Exception as e:
-        st.error(f"❌ خطأ: {e}")
+        st.session_state["rw_prev_count"] = current_count
+    except Exception:
+        pass
 
 # ====== تشغيل مراقبة ReturnWarehouse ======
 check_returnwarehouse_new_orders()
