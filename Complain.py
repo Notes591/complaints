@@ -119,6 +119,33 @@ try:
     order_number_data = order_number_sheet.get_all_values()[1:]
 except Exception:
     order_number_data = []
+# ====== نظام الإشعارات - ReturnWarehouse ======
+current_rw_ids = set(str(row[0]) for row in return_warehouse_data if row and row[0])
+
+if "rw_snapshot" not in st.session_state:
+    st.session_state["rw_snapshot"] = current_rw_ids
+else:
+    new_ids = current_rw_ids - st.session_state["rw_snapshot"]
+    
+    if new_ids:
+        try:
+            active_ids = set(str(r[0]) for r in complaints_sheet.get_all_values()[1:] if r)
+            responded_ids = set(str(r[0]) for r in responded_sheet.get_all_values()[1:] if r)
+        except Exception:
+            active_ids, responded_ids = set(), set()
+        
+        all_complaint_ids = active_ids | responded_ids
+        matched = new_ids & all_complaint_ids
+        
+        for oid in matched:
+            location = "النشطة" if oid in active_ids else "المردودة"
+            st.toast(f"تنبيه: الطلب {oid} أُضيف للمخازن وله شكوى في {location}", icon="🔔")
+        
+        if new_ids - matched:
+            count = len(new_ids - matched)
+            st.toast(f"{count} طلب جديد في المخازن بدون شكاوى", icon="📦")
+        
+        st.session_state["rw_snapshot"] = current_rw_ids    
 
 def get_order_status(order_id):
     for row in order_number_data:
