@@ -10,12 +10,9 @@ import xml.etree.ElementTree as ET
 import re
 from streamlit_autorefresh import st_autorefresh
 
-# ====== تحديث تلقائي كل 20 دقيقة ======
 st_autorefresh(interval=1200000, key="auto_refresh")
 
-# ====== إعدادات الصفحة ======
 st.set_page_config(page_title="📢 نظام الشكاوى", page_icon="⚠️", layout="wide")
-
 
 # ==============================================================
 # 🔌 الاتصال بجوجل شيت
@@ -33,8 +30,7 @@ def _get_sheets():
     sheet_titles = [
         "Complaints", "Responded", "Archive", "Types",
         "معلق ارامكس", "أرشيف أرامكس", "ReturnWarehouse", "Order Number",
-        "Notifications", "AramexNotifications", "RWNotifications",
-        "AramexSnapshots",
+        "Notifications", "RWNotifications",
         "RWSnapshots",
     ]
     d = {}
@@ -47,31 +43,28 @@ def _get_sheets():
     return d
 
 
-sheets_dict             = _get_sheets()
-complaints_sheet        = sheets_dict["Complaints"]
-responded_sheet         = sheets_dict["Responded"]
-archive_sheet           = sheets_dict["Archive"]
-types_sheet             = sheets_dict["Types"]
-aramex_sheet            = sheets_dict["معلق ارامكس"]
-aramex_archive          = sheets_dict["أرشيف أرامكس"]
-return_warehouse_sheet  = sheets_dict["ReturnWarehouse"]
-order_number_sheet      = sheets_dict["Order Number"]
-notifications_sheet     = sheets_dict["Notifications"]
-aramex_notif_sheet      = sheets_dict["AramexNotifications"]
-rw_notif_sheet          = sheets_dict["RWNotifications"]
-aramex_snapshots_sheet  = sheets_dict["AramexSnapshots"]
-rw_snapshots_sheet      = sheets_dict["RWSnapshots"]
+sheets_dict            = _get_sheets()
+complaints_sheet       = sheets_dict["Complaints"]
+responded_sheet        = sheets_dict["Responded"]
+archive_sheet          = sheets_dict["Archive"]
+types_sheet            = sheets_dict["Types"]
+aramex_sheet           = sheets_dict["معلق ارامكس"]
+aramex_archive         = sheets_dict["أرشيف أرامكس"]
+return_warehouse_sheet = sheets_dict["ReturnWarehouse"]
+order_number_sheet     = sheets_dict["Order Number"]
+notifications_sheet    = sheets_dict["Notifications"]
+rw_notif_sheet         = sheets_dict["RWNotifications"]
+rw_snapshots_sheet     = sheets_dict["RWSnapshots"]
 
 
 # ==============================================================
-# 📸 نظام Snapshots
+# 📸 نظام RW Snapshots — بدون cache عشان المقارنة دايماً دقيقة
 # ==============================================================
 
-@st.cache_data(ttl=30)
-def _load_snapshots_from(sheet_title: str):
-    sheet = sheets_dict[sheet_title]
+def _load_rw_snapshots():
+    """قراءة مباشرة من الشيت بدون cache — ضروري عشان المقارنة تكون صح"""
     try:
-        data = sheet.get_all_values()
+        data = rw_snapshots_sheet.get_all_values()
         result = {}
         row_index = {}
         for idx, row in enumerate(data[1:], start=2):
@@ -83,48 +76,32 @@ def _load_snapshots_from(sheet_title: str):
         return {}, {}
 
 
-def _snap_get(sheet_title: str, key: str):
-    cache, _ = _load_snapshots_from(sheet_title)
+def rw_snap_get(key: str):
+    cache, _ = _load_rw_snapshots()
     return cache.get(key, None)
 
 
-def _snap_set(sheet_title: str, key: str, value: str):
+def rw_snap_set(key: str, value: str):
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    sheet = sheets_dict[sheet_title]
-    _, row_index = _load_snapshots_from(sheet_title)
+    _, row_index = _load_rw_snapshots()
     try:
         idx = row_index.get(key)
         if idx:
-            sheet.update(f"B{idx}", [[value]])
-            sheet.update(f"C{idx}", [[now]])
+            rw_snapshots_sheet.update(f"B{idx}", [[value]])
+            rw_snapshots_sheet.update(f"C{idx}", [[now]])
         else:
-            sheet.append_row([key, value, now])
-        _load_snapshots_from.clear()
+            rw_snapshots_sheet.append_row([key, value, now])
     except Exception:
         pass
 
 
-def aramex_snap_get(key: str):
-    return _snap_get("AramexSnapshots", key)
-
-def aramex_snap_set(key: str, value: str):
-    _snap_set("AramexSnapshots", key, value)
-
-def rw_snap_get(key: str):
-    return _snap_get("RWSnapshots", key)
-
-def rw_snap_set(key: str, value: str):
-    _snap_set("RWSnapshots", key, value)
-
-
 # ==============================================================
-# 🛡️ Guard - يمنع كتابة نفس الإشعار مرتين في نفس الـ session
+# 🛡️ Guard — يمنع كتابة نفس الإشعار مرتين في نفس الـ session
 # ==============================================================
 
 def _init_session():
     if "_notif_written" not in st.session_state:
         st.session_state["_notif_written"] = {}
-    # ✅ FIX: flag لكشف لو في إشعار جديد كُتب في هذا الـ run
     if "_new_notif_this_run" not in st.session_state:
         st.session_state["_new_notif_this_run"] = False
 
@@ -143,18 +120,8 @@ def _mark_notif_written(key: str):
     st.session_state["_notif_written"][key] = datetime.now()
 
 
-def _is_error_status(value) -> bool:
-    if not value or not str(value).strip():
-        return True
-    v = str(value)
-    markers = ["خطأ", "❌", "error", "Error", "unbound", "failed", "Failed",
-               "فشل الاتصال", "لا توجد حالة", "لا توجد", "timeout", "Timeout"]
-    return any(m.lower() in v.lower() for m in markers)
-
-
 # ==============================================================
 # 🔔 دوال كتابة الإشعارات
-# ✅ FIX: كل دالة تضع flag لإعادة الرسم بعد كتابة الإشعار
 # ==============================================================
 
 def add_notification(order_id, section, message, comp_type=""):
@@ -168,23 +135,7 @@ def add_notification(order_id, section, message, comp_type=""):
             datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "NEW"
         ])
         get_notifications.clear()
-        st.session_state["_new_notif_this_run"] = True  # ✅ FIX
-    except Exception:
-        pass
-
-
-def add_aramex_notification(order_id, comp_type, awb, before, after):
-    guard_key = f"aramex|{order_id}|{awb}|{before[:30]}|{after[:30]}"
-    if _was_notif_written_recently(guard_key, minutes=10):
-        return
-    _mark_notif_written(guard_key)
-    try:
-        aramex_notif_sheet.append_row([
-            str(order_id), str(comp_type), str(awb), str(before), str(after),
-            datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "NEW"
-        ])
-        get_aramex_notifications.clear()
-        st.session_state["_new_notif_this_run"] = True  # ✅ FIX
+        st.session_state["_new_notif_this_run"] = True
     except Exception:
         pass
 
@@ -200,46 +151,17 @@ def add_rw_notification(order_id, comp_type, before, after):
             datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "NEW"
         ])
         get_rw_notifications.clear()
-        st.session_state["_new_notif_this_run"] = True  # ✅ FIX
+        st.session_state["_new_notif_this_run"] = True
     except Exception:
         pass
 
 
 # ==============================================================
-# 🔄 كشف تغييرات أرامكس
-# ==============================================================
-
-def check_and_notify_aramex_change(order_id, comp_type, awb, current_status,
-                                   label_prefix="AWB", source="complaint"):
-    if not awb or not str(awb).strip():
-        return
-    if _is_error_status(current_status):
-        return
-
-    snap_key = f"awb__{source}__{awb.strip()}"
-    prev = aramex_snap_get(snap_key)
-
-    if prev is None:
-        aramex_snap_set(snap_key, current_status)
-        return
-
-    if _is_error_status(prev):
-        aramex_snap_set(snap_key, current_status)
-        return
-
-    if prev.strip() != current_status.strip():
-        add_aramex_notification(
-            order_id=order_id,
-            comp_type=comp_type,
-            awb=f"{label_prefix}: {awb}",
-            before=prev,
-            after=current_status
-        )
-        aramex_snap_set(snap_key, current_status)
-
-
-# ==============================================================
 # 🔄 كشف تغييرات ReturnWarehouse
+# المنطق الجديد:
+#   - مفيش سناب محفوظ  → احفظ الحالية بدون إشعار (أول مرة)
+#   - سناب محفوظ وزي بعض → لا تعمل شيء
+#   - سناب محفوظ واختلف → إشعار + حدّث السناب
 # ==============================================================
 
 def _rw_to_str(rw_record) -> str:
@@ -257,17 +179,20 @@ def _rw_to_str(rw_record) -> str:
 
 
 def check_and_notify_rw_change(order_id, comp_type, rw_record):
-    snap_key = f"rw__{order_id}"
+    snap_key   = f"rw__{order_id}"
     current_str = _rw_to_str(rw_record)
-    prev = rw_snap_get(snap_key)
+    prev        = rw_snap_get(snap_key)
 
+    # أول مرة نشوف الطلب ده → احفظ بدون إشعار
     if prev is None:
         rw_snap_set(snap_key, current_str)
         return
 
+    # مفيش تغيير → لا تعمل شيء
     if prev == current_str:
         return
 
+    # في تغيير حقيقي → إشعار + تحديث السناب
     if not prev and current_str:
         add_rw_notification(order_id, comp_type, "لم يكن موجوداً في المخزن", current_str)
     elif prev and not current_str:
@@ -279,22 +204,13 @@ def check_and_notify_rw_change(order_id, comp_type, rw_record):
 
 
 # ==============================================================
-# 📊 جلب الإشعارات من الشيت
+# 📊 جلب الإشعارات
 # ==============================================================
 
 @st.cache_data(ttl=10)
 def get_notifications():
     try:
         data = notifications_sheet.get_all_values()
-        return data[1:] if len(data) > 1 else []
-    except Exception:
-        return []
-
-
-@st.cache_data(ttl=10)
-def get_aramex_notifications():
-    try:
-        data = aramex_notif_sheet.get_all_values()
         return data[1:] if len(data) > 1 else []
     except Exception:
         return []
@@ -324,7 +240,6 @@ def _mark_all_read(sheet, status_col_index: int):
         if updates:
             sheet.batch_update(updates)
         get_notifications.clear()
-        get_aramex_notifications.clear()
         get_rw_notifications.clear()
     except Exception:
         pass
@@ -341,7 +256,6 @@ def _delete_read_rows(sheet, status_col_index: int):
         for row_idx in reversed(to_del):
             sheet.delete_rows(row_idx)
         get_notifications.clear()
-        get_aramex_notifications.clear()
         get_rw_notifications.clear()
     except Exception:
         pass
@@ -362,15 +276,6 @@ NOTIFICATION_CSS = """
     direction: rtl;
     box-shadow: 0 2px 8px rgba(52,152,219,0.18);
 }
-.notif-card-aramex {
-    background: linear-gradient(135deg, #1a3a2a, #0d2b1a);
-    border-right: 4px solid #2ecc71;
-    border-radius: 10px;
-    padding: 12px 14px;
-    margin-bottom: 8px;
-    direction: rtl;
-    box-shadow: 0 2px 8px rgba(46,204,113,0.18);
-}
 .notif-card-rw {
     background: linear-gradient(135deg, #3a2a1a, #2b1a0d);
     border-right: 4px solid #f39c12;
@@ -382,7 +287,6 @@ NOTIFICATION_CSS = """
 }
 .notif-order { display:inline-block; background:rgba(243,156,18,0.2); color:#f39c12; border-radius:6px; padding:1px 8px; font-size:12px; font-weight:bold; margin-left:4px; }
 .notif-type  { display:inline-block; background:rgba(52,152,219,0.2); color:#7ec8e3; border-radius:6px; padding:1px 8px; font-size:12px; margin-left:4px; }
-.notif-sec   { display:inline-block; background:rgba(155,89,182,0.2); color:#bb8fce; border-radius:6px; padding:1px 8px; font-size:12px; }
 .notif-msg   { color:#ecf0f1; font-size:14px; margin:5px 0 3px 0; }
 .notif-before { color:#e74c3c; font-size:12px; margin:2px 0; }
 .notif-after  { color:#2ecc71; font-size:12px; margin:2px 0; }
@@ -408,34 +312,13 @@ def _render_general_notif(n):
     order_id, comp_type, section, message, date_str, _ = n[:6]
     ob = f'<span class="notif-order">#{order_id}</span>' if order_id else ''
     tb = f'<span class="notif-type">{comp_type}</span>'  if comp_type else ''
-    sb = f'<span class="notif-sec">📍 {section}</span>'  if section  else ''
+    sb = f'<span style="display:inline-block;background:rgba(155,89,182,0.2);color:#bb8fce;border-radius:6px;padding:1px 8px;font-size:12px;">📍 {section}</span>' if section else ''
     st.markdown(f"""
     <div class="notif-card-new">
         <div style="display:flex;flex-wrap:wrap;gap:4px;align-items:center;">
             <span style="font-size:15px;">🔵</span>{ob}{tb}{sb}
         </div>
         <div class="notif-msg">{message}</div>
-        <div class="notif-time">⏰ {date_str}</div>
-    </div>""", unsafe_allow_html=True)
-
-
-def _render_aramex_notif(n):
-    while len(n) < 7:
-        n.append("")
-    order_id, comp_type, awb, before, after, date_str, _ = n[:7]
-    ob = f'<span class="notif-order">#{order_id}</span>' if order_id else ''
-    tb = f'<span class="notif-type">{comp_type}</span>'  if comp_type else ''
-    ab = f'<span class="notif-sec">📦 {awb}</span>'      if awb else ''
-    bs = before[:90] + ("…" if len(before) > 90 else "")
-    af = after[:90]  + ("…" if len(after)  > 90 else "")
-    st.markdown(f"""
-    <div class="notif-card-aramex">
-        <div style="display:flex;flex-wrap:wrap;gap:4px;align-items:center;">
-            <span style="font-size:15px;">🔄</span>{ob}{tb}{ab}
-        </div>
-        <div class="notif-msg">تغيّرت حالة الشحنة</div>
-        <div class="notif-before">قبل: {bs}</div>
-        <div class="notif-after">بعد: {af}</div>
         <div class="notif-time">⏰ {date_str}</div>
     </div>""", unsafe_allow_html=True)
 
@@ -452,7 +335,7 @@ def _render_rw_notif(n):
     <div class="notif-card-rw">
         <div style="display:flex;flex-wrap:wrap;gap:4px;align-items:center;">
             <span style="font-size:15px;">📦</span>{ob}{tb}
-            <span class="notif-sec">🏭 ReturnWarehouse</span>
+            <span style="display:inline-block;background:rgba(155,89,182,0.2);color:#bb8fce;border-radius:6px;padding:1px 8px;font-size:12px;">🏭 ReturnWarehouse</span>
         </div>
         <div class="notif-msg">تغيّر في سجل المخزن</div>
         <div class="notif-before">قبل: {bs}</div>
@@ -462,20 +345,18 @@ def _render_rw_notif(n):
 
 
 # ==============================================================
-# 🔔 لوحة الإشعارات
+# 🔔 لوحة الإشعارات — بدون أرامكس
 # ==============================================================
 
 def render_notifications_panel():
     st.markdown(NOTIFICATION_CSS, unsafe_allow_html=True)
 
-    all_gen    = get_notifications()
-    all_aramex = get_aramex_notifications()
-    all_rw     = get_rw_notifications()
+    all_gen = get_notifications()
+    all_rw  = get_rw_notifications()
 
-    new_gen    = [n for n in all_gen    if len(n) > 5 and n[5] == "NEW"]
-    new_aramex = [n for n in all_aramex if len(n) > 6 and n[6] == "NEW"]
-    new_rw     = [n for n in all_rw     if len(n) > 6 and n[6] == "NEW"]
-    total      = len(new_gen) + len(new_aramex) + len(new_rw)
+    new_gen = [n for n in all_gen if len(n) > 5 and n[5] == "NEW"]
+    new_rw  = [n for n in all_rw  if len(n) > 6 and n[6] == "NEW"]
+    total   = len(new_gen) + len(new_rw)
 
     badge = (
         f'<span class="notif-badge">{total}</span>' if total
@@ -488,7 +369,7 @@ def render_notifications_panel():
         f'{badge}</div>', unsafe_allow_html=True
     )
 
-    col_gen, col_aramex, col_rw = st.columns(3)
+    col_gen, col_rw = st.columns(2)
 
     with col_gen:
         with st.expander(f"📬 عامة ({len(new_gen)} جديد)", expanded=len(new_gen) > 0):
@@ -504,21 +385,6 @@ def render_notifications_panel():
                     _render_general_notif(n)
             else:
                 st.info("لا توجد إشعارات جديدة.")
-
-    with col_aramex:
-        with st.expander(f"🚚 أرامكس ({len(new_aramex)} جديد)", expanded=len(new_aramex) > 0):
-            if new_aramex:
-                c1, c2 = st.columns(2)
-                if c1.button("✔️ تعليم كمقروء", key="read_aramex"):
-                    _mark_all_read(aramex_notif_sheet, 6)
-                    st.rerun()
-                if c2.button("🗑️ حذف المقروءة", key="del_aramex"):
-                    _delete_read_rows(aramex_notif_sheet, 6)
-                    st.rerun()
-                for n in reversed(new_aramex[-60:]):
-                    _render_aramex_notif(n)
-            else:
-                st.info("لا توجد تغييرات أرامكس.")
 
     with col_rw:
         with st.expander(f"📦 المخزن ({len(new_rw)} جديد)", expanded=len(new_rw) > 0):
@@ -537,7 +403,7 @@ def render_notifications_panel():
 
 
 # ==============================================================
-# ✅ رسم لوحة الإشعارات في الأعلى
+# ✅ لوحة الإشعارات في الأعلى
 # ==============================================================
 
 st.title("⚠️ نظام إدارة الشكاوى")
@@ -727,6 +593,15 @@ def cached_aramex_status(awb):
     return get_aramex_status(awb)
 
 
+def _is_error_status(value) -> bool:
+    if not value or not str(value).strip():
+        return True
+    v = str(value)
+    markers = ["خطأ", "❌", "error", "Error", "unbound", "failed", "Failed",
+               "فشل الاتصال", "لا توجد حالة", "لا توجد", "timeout", "Timeout"]
+    return any(m.lower() in v.lower() for m in markers)
+
+
 # ==============================================================
 # 🖼️ دالة عرض الشكوى
 # ==============================================================
@@ -767,6 +642,8 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
                     f"رقم الشحنة: {rw_record['رقم الشحنة']}\n"
                     f"البيان: {rw_record['البيان']}"
                 )
+
+            # ── كشف تغييرات المخزن ──
             check_and_notify_rw_change(comp_id, comp_type, rw_record)
 
             new_type     = st.selectbox("✏️ عدل نوع الشكوى",
@@ -776,15 +653,11 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
             new_outbound = st.text_input("✏️ Outbound AWB",  value=outbound_awb)
             new_inbound  = st.text_input("✏️ Inbound AWB",   value=inbound_awb)
 
-            # ── أرامكس - عرض + كشف تغيير ──
+            # ── أرامكس - عرض الحالة فقط بدون إشعارات ──
             if new_outbound.strip():
                 s_out = cached_aramex_status(new_outbound.strip())
                 if s_out and not _is_error_status(s_out):
                     st.info(f"🚚 Outbound: {new_outbound} | {s_out}")
-                    check_and_notify_aramex_change(
-                        comp_id, comp_type, new_outbound.strip(),
-                        s_out, label_prefix="Outbound AWB", source="complaint"
-                    )
                 elif s_out:
                     st.warning(f"⚠️ Outbound: {s_out}")
 
@@ -792,10 +665,6 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
                 s_in = cached_aramex_status(new_inbound.strip())
                 if s_in and not _is_error_status(s_in):
                     st.info(f"📦 Inbound: {new_inbound} | {s_in}")
-                    check_and_notify_aramex_change(
-                        comp_id, comp_type, new_inbound.strip(),
-                        s_in, label_prefix="Inbound AWB", source="complaint"
-                    )
                 elif s_in:
                     st.warning(f"⚠️ Inbound: {s_in}")
 
@@ -1043,10 +912,6 @@ if len(aramex_pending) > 1:
             cur = cached_aramex_status(p_id)
             if cur and not _is_error_status(cur):
                 st.info(f"🚚 حالة أرامكس الآن: {cur}")
-                check_and_notify_aramex_change(
-                    p_id, "معلق أرامكس", p_id,
-                    cur, label_prefix="AWB", source="pending"
-                )
             elif cur:
                 st.warning(f"⚠️ {cur}")
 
@@ -1061,9 +926,6 @@ if len(aramex_pending) > 1:
                 if b_save:
                     safe_update(aramex_sheet, f"B{i}", [[ns]])
                     safe_update(aramex_sheet, f"D{i}", [[na]])
-                    if ns != p_status and not _is_error_status(ns) and not _is_error_status(p_status):
-                        add_aramex_notification(p_id, "معلق أرامكس",
-                                                f"AWB: {p_id}", p_status, ns)
                     add_notification(p_id, "أرامكس",
                                      f"تم تعديل الطلب | الإجراء: {na[:80]}")
                     st.success("تم التعديل")
@@ -1109,14 +971,11 @@ else:
 
 
 # ==============================================================
-# ✅ FIX الرئيسي: لو في إشعار جديد كُتب في هذا الـ run
-# → نعمل rerun واحد عشان الـ panel يعيد السحب ويعرضه
-# يتم في الآخر عشان ما يقطع الـ render في المنتصف
+# ✅ rerun لو في إشعار جديد كُتب في هذا الـ run
 # ==============================================================
 if st.session_state.get("_new_notif_this_run", False):
     st.session_state["_new_notif_this_run"] = False
     st.rerun()
 
 
-# ====== 🔚 ختام ======
 st.caption("⚠️ النظام يحفظ تلقائيًا في Google Sheets + إشعارات لحظية داخل التطبيق")
