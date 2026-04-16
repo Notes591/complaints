@@ -225,6 +225,41 @@ def check_and_notify_rw_change(order_id, comp_type, rw_record):
         add_rw_notification(order_id, comp_type, prev, current_str)
 
     rw_snap_set(snap_key, current_str)
+# 🆕 كشف إضافة Orders جديدة في ReturnWarehouse
+def get_all_rw_orders():
+    try:
+        return [str(row[0]).strip() for row in return_warehouse_sheet.get_all_values()[1:] if row]
+    except:
+        return []
+
+def get_all_complaint_orders():
+    try:
+        c1 = [str(r[0]).strip() for r in complaints_sheet.get_all_values()[1:] if r]
+        c2 = [str(r[0]).strip() for r in responded_sheet.get_all_values()[1:] if r]
+        return set(c1 + c2)
+    except:
+        return set()
+
+def detect_new_rw_orders():
+    current_orders = set(get_all_rw_orders())
+    snapshot_key = "rw_all_orders"
+
+    prev_orders_str = rw_snap_get(snapshot_key)
+    prev_orders = set([x for x in prev_orders_str.split(",") if x.strip()]) if prev_orders_str else set()
+
+    if not prev_orders:
+        rw_snap_set(snapshot_key, ",".join(current_orders))
+        prev_orders = current_orders
+
+    new_orders = current_orders - prev_orders
+
+    complaint_orders = get_all_complaint_orders()
+
+    for order in new_orders:
+        if order in complaint_orders:
+            add_rw_notification(order, "ReturnWarehouse", "طلب جديد", "تمت إضافته في المخزن")
+
+    rw_snap_set(snapshot_key, ",".join(current_orders))
 
 
 # ==============================================================
@@ -431,7 +466,13 @@ def render_notifications_panel():
 # ==============================================================
 
 st.title("⚠️ نظام إدارة الشكاوى")
+
+# 🔔 عرض الإشعارات الحالية
 render_notifications_panel()
+
+# 🔍 كشف أي Order جديد في ReturnWarehouse
+detect_new_rw_orders()
+
 st.markdown("---")
 
 
