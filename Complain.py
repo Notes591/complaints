@@ -467,11 +467,15 @@ def render_notifications_panel():
 
 st.title("⚠️ نظام إدارة الشكاوى")
 
-# 🔔 عرض الإشعارات الحالية
 render_notifications_panel()
 
-# 🔍 كشف أي Order جديد في ReturnWarehouse
+# 🔍 كشف الإشعارات الجديدة
 detect_new_rw_orders()
+
+# 🔄 لو في إشعار جديد اعمل تحديث فوري للواجهة
+if st.session_state.get("_new_notif_this_run", False):
+    st.session_state["_new_notif_this_run"] = False
+    st.rerun()
 
 st.markdown("---")
 
