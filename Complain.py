@@ -58,41 +58,6 @@ rw_snapshots_sheet     = sheets_dict["RWSnapshots"]
 
 
 # ==============================================================
-# 📸 نظام RW Snapshots — بدون cache عشان المقارنة دايماً دقيقة
-# ==============================================================
-
-def _load_rw_snapshots():
-    """قراءة مباشرة من الشيت بدون cache — ضروري عشان المقارنة تكون صح"""
-    try:
-        data = rw_snapshots_sheet.get_all_values()
-        result = {}
-        row_index = {}
-        for idx, row in enumerate(data[1:], start=2):
-            if len(row) >= 2:
-                result[row[0]] = row[1]
-                row_index[row[0]] = idx
-        return result, row_index
-    except Exception:
-        return {}, {}
-
-
-def rw_snap_get(key: str):
-    cache, _ = _load_rw_snapshots()
-    return cache.get(key, None)
-
-
-def rw_snap_set(key: str, value: str):
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    _, row_index = _load_rw_snapshots()
-    try:
-        idx = row_index.get(key)
-        if idx:
-            rw_snapshots_sheet.update(f"B{idx}", [[value]])
-            rw_snapshots_sheet.update(f"C{idx}", [[now]])
-        else:
-            rw_snapshots_sheet.append_row([key, value, now])
-    except Exception:
-        pass
 
 
 # ==============================================================
@@ -123,7 +88,6 @@ def _mark_notif_written(key: str):
 # ==============================================================
 # 🔔 دوال كتابة الإشعارات
 # ==============================================================
-
 def add_notification(order_id, section, message, comp_type=""):
     guard_key = f"gen|{order_id}|{section}|{message}"
     if _was_notif_written_recently(guard_key):
@@ -131,8 +95,12 @@ def add_notification(order_id, section, message, comp_type=""):
     _mark_notif_written(guard_key)
     try:
         notifications_sheet.append_row([
-            str(order_id), str(comp_type), str(section), str(message),
-            datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "NEW"
+            str(order_id),
+            str(comp_type),
+            str(section),
+            str(message),
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "NEW"
         ])
         get_notifications.clear()
         st.session_state["_new_notif_this_run"] = True
@@ -140,41 +108,28 @@ def add_notification(order_id, section, message, comp_type=""):
         pass
 
 
-def add_rw_notification(order_id, comp_type, before, after):
-    guard_key = f"rw|{order_id}|{before[:30]}|{after[:30]}"
+def add_rw_notification(order_id, comp_type):
+    guard_key = f"rw_add|{order_id}"
+
     if _was_notif_written_recently(guard_key, minutes=10):
         return
-
-    try:
-        recent_rows = rw_notif_sheet.get_all_values()
-        cutoff_ts = datetime.now().timestamp() - 600
-
-        for row in recent_rows[-30:]:
-            if len(row) >= 6 and str(row[0]) == str(order_id) \
-               and row[3][:30] == before[:30] \
-               and row[4][:30] == after[:30]:
-
-                try:
-                    row_time = datetime.strptime(row[5], "%Y-%m-%d %H:%M:%S").timestamp()
-                    if row_time > cutoff_ts:
-                        return
-                except Exception:
-                    pass
-    except Exception:
-        pass
 
     _mark_notif_written(guard_key)
 
     try:
         rw_notif_sheet.append_row([
-            str(order_id), str(comp_type), "ReturnWarehouse", str(before), str(after),
-            datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "NEW"
+            str(order_id),
+            str(comp_type),
+            "ReturnWarehouse",
+            "تم إضافة سجل جديد",
+            "",
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "NEW"
         ])
         get_rw_notifications.clear()
         st.session_state["_new_notif_this_run"] = True
     except Exception:
         pass
-
 
 # ==============================================================
 # 🔄 كشف تغييرات ReturnWarehouse
@@ -186,46 +141,7 @@ def add_rw_notification(order_id, comp_type, before, after):
 #   - سناب محفوظ واختلف → إشعار + حدّث السناب
 # ==============================================================
 
-def _rw_to_str(rw_record) -> str:
-    if not rw_record:
-        return ""
-    return (
-        f"{rw_record.get('رقم الطلب','')}|"
-        f"{rw_record.get('الفاتورة','')}|"
-        f"{rw_record.get('التاريخ','')}|"
-        f"{rw_record.get('الزبون','')}|"
-        f"{rw_record.get('المبلغ','')}|"
-        f"{rw_record.get('رقم الشحنة','')}|"
-        f"{rw_record.get('البيان','')}"
-    )
 
-
-def check_and_notify_rw_change(order_id, comp_type, rw_record):
-    snap_key    = f"rw__{order_id}"
-    current_str = _rw_to_str(rw_record)
-    prev        = rw_snap_get(snap_key)
-
-    # أول مرة نشوف الطلب ده → احفظ بدون إشعار
-    if prev is None:
-        rw_snap_set(snap_key, current_str)
-        return
-
-    # مفيش تغيير → لا تعمل شيء
-    if prev == current_str:
-        return
-
-    # ✅ الإصلاح الرئيسي: لو current_str فاضي → جلب ناقص مش اختفاء حقيقي، تجاهل
-    if not current_str:
-        return
-
-    # في تغيير حقيقي → إشعار + تحديث السناب
-    if not prev and current_str:
-        add_rw_notification(order_id, comp_type, "لم يكن موجوداً في المخزن", current_str)
-    else:
-        add_rw_notification(order_id, comp_type, prev, current_str)
-
-    rw_snap_set(snap_key, current_str)
-# 🆕 كشف إضافة Orders جديدة في ReturnWarehouse
 def get_all_rw_orders():
     try:
         return [str(row[0]).strip() for row in return_warehouse_sheet.get_all_values()[1:] if row]
@@ -240,26 +156,6 @@ def get_all_complaint_orders():
     except:
         return set()
 
-def detect_new_rw_orders():
-    current_orders = set(get_all_rw_orders())
-    snapshot_key = "rw_all_orders"
-
-    prev_orders_str = rw_snap_get(snapshot_key)
-    prev_orders = set([x for x in prev_orders_str.split(",") if x.strip()]) if prev_orders_str else set()
-
-    if not prev_orders:
-        rw_snap_set(snapshot_key, ",".join(current_orders))
-        prev_orders = current_orders
-
-    new_orders = current_orders - prev_orders
-
-    complaint_orders = get_all_complaint_orders()
-
-    for order in new_orders:
-        if order in complaint_orders:
-            add_rw_notification(order, "ReturnWarehouse", "طلب جديد", "تمت إضافته في المخزن")
-
-    rw_snap_set(snapshot_key, ",".join(current_orders))
 
 
 # ==============================================================
@@ -406,7 +302,27 @@ def _render_rw_notif(n):
 # ==============================================================
 # 🔔 لوحة الإشعارات — بدون أرامكس
 # ==============================================================
+def detect_new_rw_orders():
+    try:
+        # مقارنة بسيطة تمنع التكرار + تكتشف الجديد
+        current = get_all_rw_orders()
 
+        if "_rw_snapshot" not in st.session_state:
+            st.session_state["_rw_snapshot"] = set(current)
+            return
+
+        old = st.session_state["_rw_snapshot"]
+        new = set(current)
+
+        added = new - old
+
+        for order in added:
+            add_rw_notification(order, "ReturnWarehouse")
+
+        st.session_state["_rw_snapshot"] = new
+
+    except Exception:
+        pass
 def render_notifications_panel():
     st.markdown(NOTIFICATION_CSS, unsafe_allow_html=True)
 
@@ -712,8 +628,7 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
                     f"البيان: {rw_record['البيان']}"
                 )
 
-            # ── كشف تغييرات المخزن ──
-            check_and_notify_rw_change(comp_id, comp_type, rw_record)
+            
 
             new_type     = st.selectbox("✏️ عدل نوع الشكوى",
                                         [comp_type] + [t for t in types_list if t != comp_type])
@@ -1039,12 +954,6 @@ else:
     st.info("لا توجد بيانات في الأرشيف")
 
 
-# ==============================================================
-# ✅ rerun لو في إشعار جديد كُتب في هذا الـ run
-# ==============================================================
-if st.session_state.get("_new_notif_this_run", False):
-    st.session_state["_new_notif_this_run"] = False
-    st.rerun()
 
 
 st.caption("⚠️ النظام يحفظ تلقائيًا في Google Sheets + إشعارات لحظية داخل التطبيق")
