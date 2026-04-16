@@ -300,6 +300,7 @@ def check_returnwarehouse_new_orders():
                 break
 
             if order_id in active_ids:
+                time.sleep(1)
                 add_notification(
                     order_id=order_id,
                     comp_type="ReturnWarehouse",
