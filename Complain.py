@@ -145,22 +145,26 @@ def add_rw_notification(order_id, comp_type, before, after):
     if _was_notif_written_recently(guard_key, minutes=10):
         return
 
-    # ✅ الإصلاح: فحص الشيت مباشرة عشان نمنع التكرار بين السيشنز المختلفة
     try:
         recent_rows = rw_notif_sheet.get_all_values()
-        cutoff_ts = datetime.now().timestamp() - 600  # آخر 10 دقائق
+        cutoff_ts = datetime.now().timestamp() - 600
+
         for row in recent_rows[-30:]:
-            if len(row) >= 6 and str(row[0]) == str(order_id) and row[3][:30] == before[:30]:
+            if len(row) >= 6 and str(row[0]) == str(order_id) \
+               and row[3][:30] == before[:30] \
+               and row[4][:30] == after[:30]:
+
                 try:
                     row_time = datetime.strptime(row[5], "%Y-%m-%d %H:%M:%S").timestamp()
                     if row_time > cutoff_ts:
-                        return  # الإشعار ده اتكتب قريباً → تجاهل
+                        return
                 except Exception:
                     pass
     except Exception:
         pass
 
     _mark_notif_written(guard_key)
+
     try:
         rw_notif_sheet.append_row([
             str(order_id), str(comp_type), "ReturnWarehouse", str(before), str(after),
