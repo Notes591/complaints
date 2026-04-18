@@ -867,6 +867,8 @@ else:
     st.info("لا توجد شكاوى أرامكس مؤرشفة.")
 
 # ====== تشغيل مراقبة followup_2 في آخر الصفحة بعد بناء الـ cache ======
-check_followup2_notifications()
+if "followup_checked" not in st.session_state:
+    check_followup2_notifications()
+    st.session_state["followup_checked"] = True
 
 st.caption("الإشعارات تظهر في الشريط الجانبي عند فتح الموقع.")
