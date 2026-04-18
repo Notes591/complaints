@@ -267,10 +267,10 @@ def check_followup2_notifications():
 
             if not cid:
                 continue
+# ==== تحديد حالة التسليم ====
+delivered = False
 
-            # ==== تحديد حالة التسليم ====
-            delivered = False
-            for awb in [outbound_awb, inbound_awb]:
+for awb in [outbound_awb, inbound_awb]:
     if awb:
         cached = st.session_state.get(f"aramex_cache_{awb}", "")
 
@@ -282,20 +282,19 @@ def check_followup2_notifications():
             delivered = True
             break
 
-            in_rw = cid in rw_ids
+in_rw = cid in rw_ids
 
-            if delivered and in_rw:
-                status = "followup_2"
-            elif delivered and not in_rw:
-                status = "followup_1"
-            else:
-                status = "other"
+if delivered and in_rw:
+    status = "followup_2"
+elif delivered and not in_rw:
+    status = "followup_1"
+else:
+    status = "other"
 
-            current_map[cid] = {
-                "status": status,
-                "type": comp_type
-            }
-
+current_map[cid] = {
+    "status": status,
+    "type": comp_type
+}
         # ===== أول تشغيل =====
         if snapshot is None:
             set_followup2_snapshot(current_map)
