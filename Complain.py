@@ -8,10 +8,8 @@ import gspread.exceptions
 import requests
 import xml.etree.ElementTree as ET
 import re
-from streamlit_autorefresh import st_autorefresh
 
-# ====== تحديث تلقائي كل دقيقة ======
-st_autorefresh(interval=60000, key="auto_refresh")
+# ====== بدون autorefresh - الإشعارات تتحدث عند فتح الموقع بس ======
 
 # ====== الاتصال بجوجل شيت ======
 scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
@@ -186,16 +184,16 @@ def clear_all_notifications():
 # ====== مراقبة "جاهز للمتابعة 2" للإشعارات ======
 # ======================================================
 # المنطق:
-# - كل فتح للموقع نحسب مين في followup_2 (Delivered + في المخزن)
-# - نقارن بالـ snapshot المحفوظ في Z1
-# - أي رقم جديد دخل followup_2 = إشعار "جاهز للمتابعة 2"
-# - نحدث Z1 بالقائمة الحالية
+# - كل فتح للموقع نشوف مين في followup_2 (Delivered + في المخزن)
+# - نقارن بـ snapshot محفوظ في Z1 في ورقة Notifications
+# - اللي كان في others/followup_1 وبقى followup_2 = إشعار
+# - الإشعار بيجي بس عند فتح الموقع مش autorefresh
 # ======================================================
 
 FOLLOWUP2_SNAPSHOT_CELL = "Z1"
 
 def get_followup2_snapshot():
-    """يقرأ أرقام الطلبات اللي كانت في followup_2 آخر مرة"""
+    """يقرأ الـ snapshot - خلية واحدة بس"""
     try:
         val = notifications_sheet.acell(FOLLOWUP2_SNAPSHOT_CELL).value
         if val and val.strip():
@@ -205,38 +203,46 @@ def get_followup2_snapshot():
         return None
 
 def set_followup2_snapshot(ids_set):
-    """يحفظ الـ snapshot"""
+    """يحفظ الـ snapshot - خلية واحدة بس"""
     try:
-        safe_update(notifications_sheet, FOLLOWUP2_SNAPSHOT_CELL, [[",".join(sorted(ids_set))]])
+        val = ",".join(sorted(ids_set)) if ids_set else ""
+        safe_update(notifications_sheet, FOLLOWUP2_SNAPSHOT_CELL, [[val]])
     except Exception:
         pass
 
 def check_followup2_notifications():
     """
-    يحسب مين في followup_2 دلوقتي ويقارن بالـ snapshot.
-    followup_2 = شكوى في المردودة + Delivered عند أرامكس + موجودة في ReturnWarehouse
+    يشتغل مرة واحدة عند فتح الموقع بس (مش في autorefresh).
+    يستخدم session_state عشان ما يشتغلش أكتر من مرة في نفس الـ session.
     """
+    # لو اشتغل قبل كده في نفس الـ session، نخرج فوراً
+    if st.session_state.get("followup2_checked", False):
+        return
+    st.session_state["followup2_checked"] = True
+
     try:
+        # 1. نقرأ الـ snapshot (call خفيف - خلية واحدة)
         snapshot = get_followup2_snapshot()
 
-        # نجيب المردودة
+        # 2. نجيب المردودة كلها (محتاجينها عشان نحسب followup_2)
         responded_rows = responded_sheet.get_all_values()
         if len(responded_rows) <= 1:
             if snapshot is None:
                 set_followup2_snapshot(set())
             return
 
-        # نحسب followup_2 الحالية
-        current_followup2 = set()
+        # 3. نحسب مين في followup_2 دلوقتي
+        # followup_2 = Delivered عند أرامكس + موجود في ReturnWarehouse
+        current_followup2 = {}  # {order_id: comp_type}
         for row in responded_rows[1:]:
             while len(row) < 8:
                 row.append("")
             cid          = clean_id(row[0])
+            comp_type    = row[1] if len(row) > 1 else ""
             outbound_awb = row[6]
             inbound_awb  = row[7]
             if not cid:
                 continue
-            # نشوف لو delivered
             delivered = False
             for awb in [outbound_awb, inbound_awb]:
                 if awb and "Delivered" in cached_aramex_status(awb):
@@ -244,35 +250,28 @@ def check_followup2_notifications():
                     break
             if not delivered:
                 continue
-            # نشوف لو في المخزن
             if get_returnwarehouse_record(cid):
-                current_followup2.add(cid)
+                current_followup2[cid] = comp_type
 
-        # أول تشغيل: نحفظ ونخرج
+        current_ids = set(current_followup2.keys())
+
+        # 4. أول تشغيل: نحفظ الحالة الحالية ونخرج بدون إشعارات
         if snapshot is None:
-            set_followup2_snapshot(current_followup2)
+            set_followup2_snapshot(current_ids)
             return
 
-        # الجديد = دخل followup_2 وما كانش فيها
-        newly_in_followup2 = current_followup2 - snapshot
-        for order_id in newly_in_followup2:
-            # نجيب نوع الشكوى
-            comp_type = ""
-            for row in responded_rows[1:]:
-                if clean_id(row[0]) == order_id and len(row) > 1:
-                    comp_type = row[1]
-                    break
-            add_notification(order_id, comp_type, "جاهز للمتابعة 2")
+        # 5. الجديد = دخل followup_2 وما كانش فيها قبل
+        newly_in = current_ids - snapshot
+        for order_id in newly_in:
+            add_notification(order_id, current_followup2[order_id], "جاهز للمتابعة 2")
 
-        # نحدث الـ snapshot
-        if current_followup2 != snapshot:
-            set_followup2_snapshot(current_followup2)
+        # 6. نحدث الـ snapshot لو في تغيير
+        if current_ids != snapshot:
+            set_followup2_snapshot(current_ids)
 
     except Exception:
         pass
 
-# ====== تشغيل مراقبة followup_2 ======
-check_followup2_notifications()
 
 # ======================================================
 # ====== عرض الإشعارات في الشريط الجانبي ======
@@ -450,6 +449,9 @@ def cached_aramex_status(awb):
     if not awb or str(awb).strip() == "":
         return ""
     return get_aramex_status(awb)
+
+# ====== تشغيل المراقبة عند فتح الموقع (بعد تحميل كل الدوال) ======
+check_followup2_notifications()
 
 # ======================================================
 # ====== دالة عرض الشكوى ======
