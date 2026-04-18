@@ -271,11 +271,16 @@ def check_followup2_notifications():
             # ==== تحديد حالة التسليم ====
             delivered = False
             for awb in [outbound_awb, inbound_awb]:
-                if awb:
-                    cached = st.session_state.get(f"aramex_cache_{awb}", "")
-                    if cached and any(x in cached.lower() for x in ["delivered", "تم التسليم"]):
-                        delivered = True
-                        break
+    if awb:
+        cached = st.session_state.get(f"aramex_cache_{awb}", "")
+
+        if not cached:
+            cached = get_aramex_status(awb)
+            st.session_state[f"aramex_cache_{awb}"] = cached
+
+        if cached and any(x in cached.lower() for x in ["delivered", "تم التسليم"]):
+            delivered = True
+            break
 
             in_rw = cid in rw_ids
 
