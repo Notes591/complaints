@@ -11,7 +11,7 @@ import re
 from streamlit_autorefresh import st_autorefresh
 
 # ====== تحديث تلقائي كل دقيقة ======
-st_autorefresh(interval=200000, key="auto_refresh")
+st_autorefresh(interval=60000, key="auto_refresh")
 
 # ====== الاتصال بجوجل شيت ======
 scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
@@ -53,6 +53,14 @@ notifications_sheet    = sheets_dict["Notifications"]
 st.set_page_config(page_title="📢 نظام الشكاوى", page_icon="⚠️", layout="wide")
 
 # ======================================================
+# ====== counter عشان كل form له key فريد ======
+if "form_counter" not in st.session_state:
+    st.session_state["form_counter"] = 0
+
+def next_form_key(base):
+    st.session_state["form_counter"] += 1
+    return f"{base}_{st.session_state['form_counter']}"
+
 # ====== دوال Retry ======
 # ======================================================
 def safe_append(sheet, row_data, retries=5, delay=1):
@@ -458,7 +466,7 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
     order_status = get_order_status(comp_id)
 
     with st.expander(f"🆔 {comp_id} | 📌 {comp_type} | 📅 {date_added} {restored} | {order_status}"):
-        with st.form(key=f"form_{comp_id}_{sheet.title}_{i}"):
+        with st.form(key=next_form_key(f"form_{comp_id}_{sheet.title}_{i}")):
             st.write(f"📌 النوع الحالي: {comp_type}")
             st.write(f"📝 الملاحظات: {notes}")
             st.write(f"✅ الإجراء: {action}")
