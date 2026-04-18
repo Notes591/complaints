@@ -27,9 +27,11 @@ sheet_titles = [
 ]
 
 sheets_dict = {}
+ss = client.open(SHEET_NAME)
+
 for title in sheet_titles:
     try:
-        sheets_dict[title] = client.open(SHEET_NAME).worksheet(title)
+        sheets_dict[title] = ss.worksheet(title)
     except Exception:
         try:
             ss = client.open(SHEET_NAME)
