@@ -8,8 +8,7 @@ import gspread.exceptions
 import requests
 import xml.etree.ElementTree as ET
 import re
-
-# ====== بدون autorefresh - الإشعارات تتحدث عند فتح الموقع بس ======
+import json
 
 # ====== الاتصال بجوجل شيت ======
 scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
@@ -22,8 +21,7 @@ SHEET_NAME = "Complaints"
 sheet_titles = [
     "Complaints", "Responded", "Archive", "Types",
     "معلق ارامكس", "أرشيف أرامكس", "ReturnWarehouse", "Order Number",
-    "Notifications",
-    "Snapshots"
+    "Notifications", "Snapshots"
 ]
 
 sheets_dict = {}
@@ -52,7 +50,6 @@ snapshots_sheet        = sheets_dict["Snapshots"]
 # ====== إعدادات الصفحة ======
 st.set_page_config(page_title="📢 نظام الشكاوى", page_icon="⚠️", layout="wide")
 
-# ======================================================
 # ====== counter عشان كل form له key فريد ======
 if "form_counter" not in st.session_state:
     st.session_state["form_counter"] = 0
@@ -61,7 +58,8 @@ def next_form_key(base):
     st.session_state["form_counter"] += 1
     return f"{base}_{st.session_state['form_counter']}"
 
-# ====== دوال Retry ======
+# ======================================================
+# ====== دوال Retry مع Exponential Backoff ======
 # ======================================================
 def safe_append(sheet, row_data, retries=5, delay=1):
     for attempt in range(retries):
@@ -69,7 +67,7 @@ def safe_append(sheet, row_data, retries=5, delay=1):
             sheet.append_row(row_data)
             return True
         except gspread.exceptions.APIError:
-            time.sleep(delay)
+            time.sleep(delay * (attempt + 1))
         except Exception:
             time.sleep(delay)
     st.error("❌ فشل append_row بعد عدة محاولات.")
@@ -81,7 +79,7 @@ def safe_update(sheet, cell_range, values, retries=5, delay=1):
             sheet.update(cell_range, values)
             return True
         except gspread.exceptions.APIError:
-            time.sleep(delay)
+            time.sleep(delay * (attempt + 1))
         except Exception:
             time.sleep(delay)
     st.error("❌ فشل update بعد عدة محاولات.")
@@ -93,7 +91,7 @@ def safe_delete(sheet, row_index, retries=5, delay=1):
             sheet.delete_rows(row_index)
             return True
         except gspread.exceptions.APIError:
-            time.sleep(delay)
+            time.sleep(delay * (attempt + 1))
         except Exception:
             time.sleep(delay)
     st.error("❌ فشل delete_rows بعد عدة محاولات.")
@@ -102,10 +100,6 @@ def safe_delete(sheet, row_index, retries=5, delay=1):
 # ======================================================
 # ====== نظام الإشعارات ======
 # ======================================================
-# ورقة Notifications:
-# A: notif_id | B: order_id | C: comp_type | D: action_done | E: timestamp | F: is_read
-# Z1: snapshot لأرقام الطلبات اللي سجلها المخزن آخر مرة (مفصولة بفاصلة)
-
 NOTIF_ICON = {
     "إضافة شكوى جديدة":          "➕",
     "حفظ شكوى":                   "💾",
@@ -120,7 +114,6 @@ NOTIF_ICON = {
 }
 
 def clean_id(val):
-    """ينظف رقم الطلب من المسافات والرموز الخفية"""
     if not val:
         return ""
     cleaned = str(val).strip()
@@ -141,10 +134,7 @@ def get_notifications():
         for i, row in enumerate(all_rows):
             if len(row) < 5:
                 continue
-            if row[0] in ("notification_id", "") :
-                continue
-            # نتجاهل صف Z1 (بيانات الـ snapshot - مش إشعار)
-            if row[0].startswith("SNAP"):
+            if row[0] in ("notification_id", ""):
                 continue
             data_rows.append({
                 "row_index":   i + 1,
@@ -161,154 +151,184 @@ def get_notifications():
         return []
 
 def mark_all_read():
+    """batch update بدل loop - أسرع وأقل API calls"""
     try:
-        all_rows = notifications_sheet.get_all_values()
+        all_rows   = notifications_sheet.get_all_values()
+        batch_data = []
         for i, row in enumerate(all_rows):
             if len(row) >= 6 and row[5] == "unread":
-                safe_update(notifications_sheet, f"F{i+1}", [["read"]])
-    except Exception:
-        pass
+                batch_data.append({"range": f"F{i+1}", "values": [["read"]]})
+        if batch_data:
+            notifications_sheet.batch_update(batch_data)
+    except Exception as e:
+        st.error(f"خطأ في تعليم المقروء: {e}")
 
 def clear_all_notifications():
-    """يمسح إشعارات بس ويحتفظ بالـ snapshot في Z1"""
+    """يمسح كل الإشعارات دفعة واحدة"""
     try:
-        all_rows = notifications_sheet.get_all_values()
-        for i in range(len(all_rows), 0, -1):
-            row = all_rows[i-1]
-            # نحافظ على الـ snapshot ولا نحذفه
-            if len(row) > 0 and row[0].startswith("SNAP"):
-                continue
-            safe_delete(notifications_sheet, i)
-    except Exception:
-        pass
+        notifications_sheet.clear()
+    except Exception as e:
+        st.error(f"خطأ في مسح الإشعارات: {e}")
 
 # ======================================================
-# ====== مراقبة "جاهز للمتابعة 2" للإشعارات ======
+# ====== Snapshot لـ followup2 في ورقة Snapshots ======
 # ======================================================
-# المنطق:
-# - كل فتح للموقع نشوف مين في followup_2 (Delivered + في المخزن)
-# - نقارن بـ snapshot محفوظ في Z1 في ورقة Notifications
-# - اللي كان في others/followup_1 وبقى followup_2 = إشعار
-# - الإشعار بيجي بس عند فتح الموقع مش autorefresh
+#
+# هيكل ورقة Snapshots - صف واحد ثابت:
+#   A = "followup2_snapshot"  (key ثابت للبحث)
+#   B = JSON: { "order_id": "other"|"followup_1"|"followup_2", ... }
+#   C = timestamp آخر تحديث
+#
+# المنطق عند كل فتح للموقع:
+#   1. نقرأ الـ snapshot القديم من الورقة (B في صف الـ key)
+#   2. نبني الـ map الجديد من بيانات responded + aramex cache
+#   3. نقارن: أي طلب انتقل من other/followup_1 إلى followup_2 فقط → إشعار
+#   4. نكتب الـ map الجديد فوق نفس الصف (لا نضيف صفوف جديدة)
+#
 # ======================================================
 
-# ======================================================
-
-# ====== Snapshot (نسخة الحالة الكاملة) ======
-
-def set_followup2_snapshot(data):
-    try:
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-        serialized = "|".join([f"{k}:{v['status']}" for k, v in data.items()])
-
-        rows = snapshots_sheet.get_all_values()
-
-        for i, row in enumerate(rows, start=1):
-            if len(row) > 0 and row[0] == "followup2":
-                snapshots_sheet.update(f"A{i}:C{i}", [["followup2", serialized, timestamp]])
-                return
-
-        snapshots_sheet.append_row(["followup2", serialized, timestamp])
-
-    except Exception:
-        pass
-
+SNAPSHOT_KEY = "followup2_snapshot"
 
 def get_followup2_snapshot():
+    """
+    يقرأ الـ snapshot من ورقة Snapshots.
+    يرجع:
+      - None  → أول تشغيل (الصف مش موجود)
+      - dict  → { order_id: "other"|"followup_1"|"followup_2" }
+    """
     try:
-        rows = snapshots_sheet.get_all_values()
-
-        for row in rows:
-            if len(row) > 1 and row[0] == "followup2":
-                val = row[1]
-
-                result = {}
-                if val:
-                    for p in val.split("|"):
-                        if ":" in p:
-                            k, v = p.split(":", 1)
-                            result[clean_id(k)] = v
-
-                return result
-
-        return None
+        all_rows = snapshots_sheet.get_all_values()
+        for row in all_rows:
+            if len(row) >= 2 and row[0] == SNAPSHOT_KEY:
+                raw = row[1].strip()
+                if not raw:
+                    return {}
+                return json.loads(raw)
+        return None  # الصف مش موجود = أول تشغيل
     except Exception:
         return None
 
-
-# ====== check_followup2 (المعدل بالكامل) ======
-
-def check_followup2_notifications():
-
+def set_followup2_snapshot(status_map):
+    """
+    يكتب الـ snapshot في ورقة Snapshots.
+    - لو الصف موجود → يكتب فوقه (نفس الصف، لا صفوف جديدة)
+    - لو مش موجود  → يضيف صف جديد مرة واحدة بس
+    """
     try:
-        snapshot = get_followup2_snapshot()
+        timestamp  = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        serialized = json.dumps(status_map, ensure_ascii=False)
+        all_rows   = snapshots_sheet.get_all_values()
 
+        for i, row in enumerate(all_rows, start=1):
+            if len(row) >= 1 and row[0] == SNAPSHOT_KEY:
+                # نكتب فوق نفس الصف بالضبط
+                snapshots_sheet.update(f"A{i}:C{i}", [[SNAPSHOT_KEY, serialized, timestamp]])
+                return
+
+        # مش موجود → نضيفه لأول مرة فقط
+        snapshots_sheet.append_row([SNAPSHOT_KEY, serialized, timestamp])
+
+    except Exception as e:
+        st.error(f"خطأ في حفظ الـ snapshot: {e}")
+
+def build_current_status_map():
+    """
+    يبني map للحالة الحالية لكل طلب في responded:
+      { order_id: "other" | "followup_1" | "followup_2" }
+
+    يعتمد على:
+    - st.session_state[f"aramex_cache_{awb}"] → محفوظ بواسطة cached_aramex_status
+    - return_warehouse_data → محمل في الذاكرة
+
+    يُستدعى في آخر الصفحة بعد عرض قسم المردودة كاملاً
+    عشان الـ cache يكون اتبنى.
+    """
+    status_map = {}
+    try:
         responded_rows = responded_sheet.get_all_values()
         if len(responded_rows) <= 1:
-            return
+            return status_map
 
-        # IDs المخزن
-        try:
-            rw_ids = {clean_id(v) for v in return_warehouse_sheet.col_values(1)[1:] if clean_id(v)}
-        except Exception:
-            rw_ids = set()
-
-        current_map = {}
+        rw_ids = {clean_id(row[0]) for row in return_warehouse_data if row and clean_id(row[0])}
 
         for row in responded_rows[1:]:
             while len(row) < 8:
                 row.append("")
 
             cid          = clean_id(row[0])
-            comp_type    = row[1] if len(row) > 1 else ""
             outbound_awb = row[6].strip()
             inbound_awb  = row[7].strip()
 
             if not cid:
                 continue
 
-            # ==== تحديد حالة التسليم ====
             delivered = False
             for awb in [outbound_awb, inbound_awb]:
                 if awb:
                     cached = st.session_state.get(f"aramex_cache_{awb}", "")
-                    if cached and any(x in cached.lower() for x in ["delivered", "تم التسليم"]):
+                    if cached and "delivered" in cached.lower():
                         delivered = True
                         break
 
             in_rw = cid in rw_ids
 
             if delivered and in_rw:
-                status = "followup_2"
+                status_map[cid] = "followup_2"
             elif delivered and not in_rw:
-                status = "followup_1"
+                status_map[cid] = "followup_1"
             else:
-                status = "other"
-
-            current_map[cid] = {
-                "status": status,
-                "type": comp_type
-            }
-
-        # ===== أول تشغيل =====
-        if snapshot is None:
-            set_followup2_snapshot(current_map)
-            return
-
-        # ===== المقارنة =====
-        for cid, data in current_map.items():
-            new_status = data["status"]
-            old_status = snapshot.get(cid, "other")
-
-            if old_status != "followup_2" and new_status == "followup_2":
-                add_notification(cid, data["type"], "جاهز للمتابعة 2")
-
-        # ===== تحديث الحالة =====
-        set_followup2_snapshot(current_map)
+                status_map[cid] = "other"
 
     except Exception as e:
-        st.error(f"خطأ في check_followup2: {e}")
+        st.error(f"خطأ في build_current_status_map: {e}")
+
+    return status_map
+
+def check_followup2_notifications(current_map):
+    """
+    يقارن الـ map الحالي بالـ snapshot المحفوظ في Snapshots.
+
+    الإشعار يُطلق فقط لو طلب انتقل من:
+      other     → followup_2   ✅ إشعار
+      followup_1 → followup_2  ✅ إشعار
+      followup_2 → followup_2  ❌ لا إشعار (كان كده من قبل)
+      أي حالة   → other/followup_1 ❌ لا إشعار
+
+    بعد المقارنة يحفظ الـ map الجديد فوق نفس الصف في Snapshots.
+    """
+    if not current_map:
+        return
+
+    old_snapshot = get_followup2_snapshot()
+
+    # أول تشغيل: نحفظ الحالة الحالية بدون إشعارات
+    if old_snapshot is None:
+        set_followup2_snapshot(current_map)
+        st.toast("✅ تم تهيئة نظام إشعارات المتابعة للمرة الأولى.")
+        return
+
+    # المقارنة
+    notified = False
+    for cid, new_status in current_map.items():
+        old_status = old_snapshot.get(cid, "other")
+        if old_status != "followup_2" and new_status == "followup_2":
+            comp_type = ""
+            try:
+                responded_rows = responded_sheet.get_all_values()
+                for row in responded_rows[1:]:
+                    if clean_id(row[0]) == cid:
+                        comp_type = row[1] if len(row) > 1 else ""
+                        break
+            except Exception:
+                pass
+            add_notification(cid, comp_type, "جاهز للمتابعة 2")
+            notified = True
+
+    # نحدث الـ snapshot بالحالة الجديدة دائماً (فوق نفس الصف)
+    set_followup2_snapshot(current_map)
+
+    if notified:
+        st.rerun()
 
 # ======================================================
 # ====== عرض الإشعارات في الشريط الجانبي ======
@@ -344,12 +364,12 @@ def render_notifications_sidebar():
             return
 
         for notif in notifications[:50]:
-            icon    = NOTIF_ICON.get(notif["action_done"], "🔔")
-            is_new  = notif["is_read"] == "unread"
-            bg      = "#fff3cd" if is_new else "#f8f9fa"
-            border  = "2px solid #ffc107" if is_new else "1px solid #dee2e6"
-            badge   = " 🆕" if is_new else ""
-            weight  = "bold" if is_new else "normal"
+            icon   = NOTIF_ICON.get(notif["action_done"], "🔔")
+            is_new = notif["is_read"] == "unread"
+            bg     = "#fff3cd" if is_new else "#f8f9fa"
+            border = "2px solid #ffc107" if is_new else "1px solid #dee2e6"
+            badge  = " 🆕" if is_new else ""
+            weight = "bold" if is_new else "normal"
 
             st.markdown(f"""
             <div style='background:{bg};border:{border};border-radius:8px;
@@ -449,7 +469,7 @@ def get_aramex_status(awb_number):
             "Transaction": {"Reference1":"","Reference2":"","Reference3":"","Reference4":"","Reference5":""},
             "LabelInfo":  None
         }
-        url = "https://ws.aramex.net/ShippingAPI.V2/Tracking/Service_1_0.svc/json/TrackShipments"
+        url      = "https://ws.aramex.net/ShippingAPI.V2/Tracking/Service_1_0.svc/json/TrackShipments"
         response = requests.post(url, json=payload, headers={"Content-Type":"application/json"}, timeout=10)
         if response.status_code != 200:
             return f"❌ فشل الاتصال - كود {response.status_code}"
@@ -470,8 +490,8 @@ def get_aramex_status(awb_number):
                         reverse=True
                     )[0]
                     desc = last_track.find('UpdateDescription').text if last_track.find('UpdateDescription') is not None else "—"
-                    date = last_track.find('UpdateDateTime').text if last_track.find('UpdateDateTime') is not None else "—"
-                    loc  = last_track.find('UpdateLocation').text if last_track.find('UpdateLocation') is not None else "—"
+                    date = last_track.find('UpdateDateTime').text    if last_track.find('UpdateDateTime')    is not None else "—"
+                    loc  = last_track.find('UpdateLocation').text    if last_track.find('UpdateLocation')    is not None else "—"
                     ref  = extract_reference(last_track)
                     info = f"{desc} بتاريخ {date} في {loc}"
                     if ref:
@@ -486,10 +506,9 @@ def cached_aramex_status(awb):
     if not awb or str(awb).strip() == "":
         return ""
     result = get_aramex_status(awb)
-    # نحفظ في session_state عشان check_followup2 يقدر يقراه بدون API call جديد
+    # نحفظ في session_state عشان build_current_status_map يقدر يقراه
     st.session_state[f"aramex_cache_{awb}"] = result
     return result
-
 
 # ======================================================
 # ====== دالة عرض الشكوى ======
@@ -676,6 +695,8 @@ else:
     st.info("لا توجد شكاوى نشطة حالياً.")
 
 # ====== عرض الإجراءات المردودة ======
+# ملاحظة: cached_aramex_status بيملأ session_state أثناء العرض هنا
+# وبعدين build_current_status_map يقدر يقرأ الـ cache بدون API calls جديدة
 st.header("✅ الإجراءات المردودة حسب النوع:")
 responded_notes = responded_sheet.get_all_values()
 if len(responded_notes) > 1:
@@ -752,7 +773,7 @@ if len(aramex_pending) > 1:
             st.write(f"📌 الحالة الحالية: {status}")
             st.write(f"✅ الإجراء الحالي: {action}")
             st.caption(f"📅 تاريخ الإضافة: {date_added}")
-            with st.form(key=f"form_aramex_{order_id}_{i}"):
+            with st.form(key=next_form_key(f"form_aramex_{order_id}_{i}")):
                 new_status = st.text_input("✏️ عدل الحالة", value=status)
                 new_action = st.text_area("✏️ عدل الإجراء", value=action)
                 col1, col2, col3 = st.columns(3)
@@ -805,7 +826,12 @@ if len(aramex_archived) > 1:
 else:
     st.info("لا توجد شكاوى أرامكس مؤرشفة.")
 
-# ====== تشغيل مراقبة followup_2 في آخر الصفحة بعد بناء الـ cache ======
-check_followup2_notifications()
+# ======================================================
+# ====== تشغيل مراقبة followup_2 في آخر الصفحة ======
+# يجي هنا عشان الـ aramex cache يكون اتبنى كاملاً
+# أثناء عرض قسم المردودة فوق
+# ======================================================
+current_status_map = build_current_status_map()
+check_followup2_notifications(current_status_map)
 
 st.caption("الإشعارات تظهر في الشريط الجانبي عند فتح الموقع.")
