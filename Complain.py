@@ -193,119 +193,122 @@ def clear_all_notifications():
 # ======================================================
 
 # ======================================================
-# ====== ورقة Snapshots - تحفظ الحالة القديمة والجديدة ======
-# ======================================================
-# الأعمدة: A: key | B: old_value | C: new_value | D: timestamp
-# الصف الأول في الورقة محجوز لـ followup2_snapshot كـ key="followup2"
 
-def get_followup2_snapshot():
-    """يقرأ الـ snapshot من ورقة Snapshots - صف واحد بس"""
-    try:
-        rows = snapshots_sheet.get_all_values()
-        for row in rows:
-            if len(row) > 1 and row[0] == "followup2":
-                val = row[2] if len(row) > 2 else row[1]
-                if val and val.strip():
-                    return {clean_id(x) for x in val.split(",") if clean_id(x)}
-        return None  # None = أول تشغيل
-    except Exception:
-        return None
+# ====== Snapshot (نسخة الحالة الكاملة) ======
 
-def set_followup2_snapshot(old_ids, new_ids):
-    """
-    يحفظ في ورقة Snapshots:
-    - الحالة القديمة (old_ids)
-    - الحالة الجديدة (new_ids)
-    - التوقيت
-    """
+def set_followup2_snapshot(data):
     try:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        old_val   = ",".join(sorted(old_ids)) if old_ids else ""
-        new_val   = ",".join(sorted(new_ids)) if new_ids else ""
-        rows      = snapshots_sheet.get_all_values()
-        # نشوف لو الصف موجود ونحدثه
+
+        serialized = "|".join([f"{k}:{v['status']}" for k, v in data.items()])
+
+        rows = snapshots_sheet.get_all_values()
+
         for i, row in enumerate(rows, start=1):
             if len(row) > 0 and row[0] == "followup2":
-                snapshots_sheet.update(f"A{i}:D{i}", [["followup2", old_val, new_val, timestamp]])
+                snapshots_sheet.update(f"A{i}:C{i}", [["followup2", serialized, timestamp]])
                 return
-        # مش موجود - نضيف صف جديد
-        snapshots_sheet.append_row(["followup2", old_val, new_val, timestamp])
+
+        snapshots_sheet.append_row(["followup2", serialized, timestamp])
+
     except Exception:
         pass
 
-def check_followup2_notifications():
-    """
-    يشتغل في آخر الصفحة بعد ما الـ aramex cache اتبنى.
-    يستخدم session_state عشان ما يشتغلش أكتر من مرة في نفس الـ session.
 
-    المنطق:
-    - يقرأ الـ snapshot (الحالة السابقة) من ورقة Snapshots
-    - يحسب followup_2 الحالية من الـ cache اللي اتبنى أثناء عرض الصفحة
-    - أي رقم جديد دخل followup_2 = إشعار
-    - يحفظ الحالة القديمة والجديدة في Snapshots
-    """
-    if st.session_state.get("followup2_checked", False):
-        return
-    st.session_state["followup2_checked"] = True
+def get_followup2_snapshot():
+    try:
+        rows = snapshots_sheet.get_all_values()
+
+        for row in rows:
+            if len(row) > 1 and row[0] == "followup2":
+                val = row[1]
+
+                result = {}
+                if val:
+                    for p in val.split("|"):
+                        if ":" in p:
+                            k, v = p.split(":", 1)
+                            result[clean_id(k)] = v
+
+                return result
+
+        return None
+    except Exception:
+        return None
+
+
+# ====== check_followup2 (المعدل بالكامل) ======
+
+def check_followup2_notifications():
 
     try:
-        # 1. نقرأ الـ snapshot السابق
         snapshot = get_followup2_snapshot()
 
-        # 2. نجيب المردودة
         responded_rows = responded_sheet.get_all_values()
         if len(responded_rows) <= 1:
-            if snapshot is None:
-                set_followup2_snapshot(set(), set())
             return
 
-        # 3. نجيب أرقام المخزن (call واحد خفيف)
+        # IDs المخزن
         try:
             rw_ids = {clean_id(v) for v in return_warehouse_sheet.col_values(1)[1:] if clean_id(v)}
         except Exception:
             rw_ids = set()
 
-        # 4. نحسب followup_2 من الـ session_state cache (مش API calls جديدة)
-        current_followup2 = {}
+        current_map = {}
+
         for row in responded_rows[1:]:
             while len(row) < 8:
                 row.append("")
+
             cid          = clean_id(row[0])
             comp_type    = row[1] if len(row) > 1 else ""
             outbound_awb = row[6].strip()
             inbound_awb  = row[7].strip()
-            if not cid or cid not in rw_ids:
+
+            if not cid:
                 continue
+
+            # ==== تحديد حالة التسليم ====
             delivered = False
             for awb in [outbound_awb, inbound_awb]:
-                if not awb:
-                    continue
-                cached = st.session_state.get(f"aramex_cache_{awb}", None)
-                if cached is not None and "Delivered" in cached:
-                    delivered = True
-                    break
-            if delivered:
-                current_followup2[cid] = comp_type
+                if awb:
+                    cached = st.session_state.get(f"aramex_cache_{awb}", "")
+                    if cached and any(x in cached.lower() for x in ["delivered", "تم التسليم"]):
+                        delivered = True
+                        break
 
-        current_ids = set(current_followup2.keys())
+            in_rw = cid in rw_ids
 
-        # 5. أول تشغيل: نحفظ الحالة الحالية ونخرج بدون إشعارات
+            if delivered and in_rw:
+                status = "followup_2"
+            elif delivered and not in_rw:
+                status = "followup_1"
+            else:
+                status = "other"
+
+            current_map[cid] = {
+                "status": status,
+                "type": comp_type
+            }
+
+        # ===== أول تشغيل =====
         if snapshot is None:
-            set_followup2_snapshot(set(), current_ids)
+            set_followup2_snapshot(current_map)
             return
 
-        # 6. الجديد = دخل followup_2 وما كانش فيها قبل
-        newly_in = current_ids - snapshot
-        for order_id in newly_in:
-            add_notification(order_id, current_followup2.get(order_id, ""), "جاهز للمتابعة 2")
+        # ===== المقارنة =====
+        for cid, data in current_map.items():
+            new_status = data["status"]
+            old_status = snapshot.get(cid, "other")
 
-        # 7. نحفظ القديم والجديد في Snapshots
-        if current_ids != snapshot:
-            set_followup2_snapshot(snapshot, current_ids)
+            if old_status != "followup_2" and new_status == "followup_2":
+                add_notification(cid, data["type"], "جاهز للمتابعة 2")
 
-    except Exception:
-        pass
+        # ===== تحديث الحالة =====
+        set_followup2_snapshot(current_map)
 
+    except Exception as e:
+        st.error(f"خطأ في check_followup2: {e}")
 
 # ======================================================
 # ====== عرض الإشعارات في الشريط الجانبي ======
