@@ -559,7 +559,7 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
     order_status = get_order_status(comp_id)
 
     with st.expander(f"🆔 {comp_id} | 📌 {comp_type} | 📅 {date_added} {restored} | {order_status}"):
-        with st.form(key=next_form_key(f"form_{comp_id}_{sheet.title}_{i}")):
+        with st.form(key=f"form_{comp_id}_{sheet.title}_{i}"):
             st.write(f"📌 النوع الحالي: {comp_type}")
             st.write(f"📝 الملاحظات: {notes}")
             st.write(f"✅ الإجراء: {action}")
