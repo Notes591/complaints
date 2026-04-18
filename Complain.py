@@ -11,7 +11,7 @@ import re
 from streamlit_autorefresh import st_autorefresh
 
 # ====== تحديث تلقائي كل دقيقة عشان الإشعارات تتحدث ======
-st_autorefresh(interval=200000, key="auto_refresh")
+st_autorefresh(interval=60000, key="auto_refresh")
 
 # ====== الاتصال بجوجل شيت ======
 scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
@@ -226,44 +226,88 @@ def render_notifications_sidebar():
 # ======================================================
 # ====== مراقبة ReturnWarehouse للإشعارات التلقائية ======
 # ======================================================
+def clean_id(val):
+    """ينظف رقم الطلب من المسافات والرموز الخفية والـ unicode غير المرئي"""
+    if not val:
+        return ""
+    cleaned = str(val).strip()
+    cleaned = re.sub(r'[\u200b\u200c\u200d\u00a0\ufeff\u202a-\u202e]', '', cleaned)
+    return cleaned.strip()
+
+# ====== خلية ثابتة نحفظ فيها آخر صف تم فحصه في ReturnWarehouse ======
+# نستخدم خلية Z1 في ورقة Notifications كـ "pointer" - call واحد للقراءة وcall واحد للكتابة
+RW_POINTER_CELL = "Z1"
+
+def get_rw_pointer():
+    """يقرأ آخر رقم صف تم فحصه - call واحد خفيف جداً"""
+    try:
+        val = notifications_sheet.acell(RW_POINTER_CELL).value
+        if val and str(val).strip().isdigit():
+            return int(val)
+        return None  # None = أول تشغيل
+    except Exception:
+        return None
+
+def set_rw_pointer(row_num):
+    """يحفظ آخر رقم صف تم فحصه - call واحد خفيف"""
+    try:
+        safe_update(notifications_sheet, RW_POINTER_CELL, [[str(row_num)]])
+    except Exception:
+        pass
+
 def check_returnwarehouse_new_orders():
     """
-    يشوف لو في طلبات جديدة في ReturnWarehouse عندها شكوى في النظام
-    ويبعت إشعار مرة واحدة بس (عن طريق تتبع آخر عدد صفوف في session_state)
+    منطق المراقبة بدون تأخير:
+    - يقرأ الـ pointer من خلية Z1 (call خفيف)
+    - لو مفيش pointer (أول تشغيل): يقرأ عمود A بس عشان يحفظ العدد ويخرج
+    - لو في pointer: يقرأ عمود A بس ويشوف الجديد من بعد الـ pointer
+    - مش بيقرأ الشيت كله أبداً
     """
     try:
-        rw_data = return_warehouse_sheet.get_all_values()
-        current_count = len(rw_data) - 1  # بدون الهيدر
+        pointer = get_rw_pointer()  # call واحد خفيف
 
-        # نجيب كل أرقام الطلبات في النشطة والمردودة والأرشيف
+        # نقرأ عمود A بس (أسرع بكتير من get_all_values)
+        col_a = return_warehouse_sheet.col_values(1)
+        # نشيل الهيدر ونظف ونشيل الفراغات
+        real_rows = [clean_id(v) for v in col_a[1:] if clean_id(v) != ""]
+        current_count = len(real_rows)
+
+        # أول تشغيل: نحفظ العدد الحالي كـ pointer ونخرج بدون إشعارات
+        if pointer is None:
+            set_rw_pointer(current_count)
+            return
+
+        # مفيش جديد
+        if current_count <= pointer:
+            return
+
+        # في صفوف جديدة - نجيب أرقام الطلبات الجديدة بس
+        new_order_ids = real_rows[pointer:]
+
+        # نجيب أرقام الشكاوي من عمود A بس (أسرع)
         active_ids = set()
         for sheet_obj in [complaints_sheet, responded_sheet, archive_sheet]:
             try:
-                rows = sheet_obj.get_all_values()[1:]
-                for row in rows:
-                    if len(row) > 0 and row[0].strip():
-                        active_ids.add(str(row[0]).strip())
+                col = sheet_obj.col_values(1)
+                for v in col[1:]:
+                    cid = clean_id(v)
+                    if cid:
+                        active_ids.add(cid)
             except Exception:
                 pass
 
-        # نتحقق من الصفوف الجديدة في ReturnWarehouse
-        prev_count = st.session_state.get("rw_prev_count", current_count)
+        # نبعت إشعار لكل طلب جديد موجود في الشكاوي
+        for order_id in new_order_ids:
+            if order_id in active_ids:
+                add_notification(
+                    order_id=order_id,
+                    comp_type="ReturnWarehouse",
+                    action_done="طلب جديد في ReturnWarehouse"
+                )
 
-        if current_count > prev_count:
-            # في صفوف جديدة
-            new_rows = rw_data[prev_count + 1:]  # +1 للهيدر
-            for row in new_rows:
-                if len(row) > 0:
-                    order_id = str(row[0]).strip()
-                    if order_id in active_ids:
-                        # الطلب عنده شكوى موجودة - نبعت إشعار
-                        add_notification(
-                            order_id=order_id,
-                            comp_type="ReturnWarehouse",
-                            action_done="طلب جديد في ReturnWarehouse"
-                        )
+        # نحدث الـ pointer
+        set_rw_pointer(current_count)
 
-        st.session_state["rw_prev_count"] = current_count
     except Exception:
         pass
 
