@@ -203,69 +203,81 @@ def get_followup2_snapshot():
         return None
 
 def set_followup2_snapshot(ids_set):
-    """يحفظ الـ snapshot - خلية واحدة بس"""
+    """يحفظ الـ snapshot - بدون retry"""
     try:
         val = ",".join(sorted(ids_set)) if ids_set else ""
-        safe_update(notifications_sheet, FOLLOWUP2_SNAPSHOT_CELL, [[val]])
+        notifications_sheet.update(FOLLOWUP2_SNAPSHOT_CELL, [[val]])
     except Exception:
         pass
 
 def check_followup2_notifications():
     """
-    يشتغل مرة واحدة عند فتح الموقع بس (مش في autorefresh).
-    يستخدم session_state عشان ما يشتغلش أكتر من مرة في نفس الـ session.
+    يشتغل مرة واحدة بس في كل session.
+    بيقارن اللي في followup_2 دلوقتي بالـ snapshot المحفوظ.
+    followup_2 = Delivered عند أرامكس + موجود في ReturnWarehouse.
+
+    لتفادي الـ 429:
+    - بيستخدم cached_aramex_status (مخزنة 5 دقايق)
+    - لو الـ cache فاضي (أول تشغيل) بيتخطى الفحص ويحفظ snapshot فاضي
+      عشان في المرة الجاية الـ cache يكون جاهز
     """
-    # لو اشتغل قبل كده في نفس الـ session، نخرج فوراً
     if st.session_state.get("followup2_checked", False):
         return
     st.session_state["followup2_checked"] = True
 
     try:
-        # 1. نقرأ الـ snapshot (call خفيف - خلية واحدة)
         snapshot = get_followup2_snapshot()
 
-        # 2. نجيب المردودة كلها (محتاجينها عشان نحسب followup_2)
         responded_rows = responded_sheet.get_all_values()
         if len(responded_rows) <= 1:
             if snapshot is None:
                 set_followup2_snapshot(set())
             return
 
-        # 3. نحسب مين في followup_2 دلوقتي
-        # followup_2 = Delivered عند أرامكس + موجود في ReturnWarehouse
-        current_followup2 = {}  # {order_id: comp_type}
+        # نجيب أرقام الطلبات الموجودة في المخزن (عمود A بس - call واحد خفيف)
+        try:
+            rw_ids = {clean_id(v) for v in return_warehouse_sheet.col_values(1)[1:] if clean_id(v)}
+        except Exception:
+            rw_ids = set()
+
+        # نحسب followup_2 بدون استدعاء أرامكس من جديد
+        # بنستخدم الـ cache الموجود بس - لو مش موجود في الـ cache نتخطاه
+        current_followup2 = {}
         for row in responded_rows[1:]:
             while len(row) < 8:
                 row.append("")
             cid          = clean_id(row[0])
             comp_type    = row[1] if len(row) > 1 else ""
-            outbound_awb = row[6]
-            inbound_awb  = row[7]
+            outbound_awb = row[6].strip()
+            inbound_awb  = row[7].strip()
             if not cid:
                 continue
+            # نشوف لو في المخزن أولاً (بدون API) - لو مش موجود نتخطى
+            if cid not in rw_ids:
+                continue
+            # نشوف الـ Delivered من الـ cache بس (مش call جديد)
             delivered = False
             for awb in [outbound_awb, inbound_awb]:
-                if awb and "Delivered" in cached_aramex_status(awb):
+                if not awb:
+                    continue
+                # نقرأ من الـ cache بس - لو مش موجود في الـ cache نتخطى
+                cached = st.session_state.get(f"aramex_cache_{awb}", None)
+                if cached is not None and "Delivered" in cached:
                     delivered = True
                     break
-            if not delivered:
-                continue
-            if get_returnwarehouse_record(cid):
+            if delivered:
                 current_followup2[cid] = comp_type
 
         current_ids = set(current_followup2.keys())
 
-        # 4. أول تشغيل: نحفظ الحالة الحالية ونخرج بدون إشعارات
         if snapshot is None:
             set_followup2_snapshot(current_ids)
             return
 
-        # 5. الجديد = دخل followup_2 وما كانش فيها قبل
         newly_in = current_ids - snapshot
         for order_id in newly_in:
             add_notification(order_id, current_followup2[order_id], "جاهز للمتابعة 2")
 
-        # 6. نحدث الـ snapshot لو في تغيير
         if current_ids != snapshot:
             set_followup2_snapshot(current_ids)
 
@@ -448,7 +460,10 @@ def get_aramex_status(awb_number):
 def cached_aramex_status(awb):
     if not awb or str(awb).strip() == "":
         return ""
-    return get_aramex_status(awb)
+    result = get_aramex_status(awb)
+    # نحفظ في session_state عشان check_followup2 يقدر يقراه بدون API call جديد
+    st.session_state[f"aramex_cache_{awb}"] = result
+    return result
 
 # ====== تشغيل المراقبة عند فتح الموقع (بعد تحميل كل الدوال) ======
 check_followup2_notifications()
