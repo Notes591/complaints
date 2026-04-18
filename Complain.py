@@ -267,40 +267,49 @@ def check_followup2_notifications():
 
             if not cid:
                 continue
-# ==== تحديد حالة التسليم ====
-try:
-    # كل الكود هنا
 
-    delivered = False
+            # ==== تحديد حالة التسليم ====
+            delivered = False
+            for awb in [outbound_awb, inbound_awb]:
+                if awb:
+                    cached = st.session_state.get(f"aramex_cache_{awb}", "")
+                    if cached and any(x in cached.lower() for x in ["delivered", "تم التسليم"]):
+                        delivered = True
+                        break
 
-    for awb in [outbound_awb, inbound_awb]:
-        if awb:
-            cached = st.session_state.get(f"aramex_cache_{awb}", "")
+            in_rw = cid in rw_ids
 
-            if not cached:
-                cached = get_aramex_status(awb)
-                st.session_state[f"aramex_cache_{awb}"] = cached
+            if delivered and in_rw:
+                status = "followup_2"
+            elif delivered and not in_rw:
+                status = "followup_1"
+            else:
+                status = "other"
 
-            if cached and any(x in cached.lower() for x in ["delivered", "تم التسليم"]):
-                delivered = True
-                break
+            current_map[cid] = {
+                "status": status,
+                "type": comp_type
+            }
 
-    in_rw = cid in rw_ids
+        # ===== أول تشغيل =====
+        if snapshot is None:
+            set_followup2_snapshot(current_map)
+            return
 
-    if delivered and in_rw:
-        status = "followup_2"
-    elif delivered and not in_rw:
-        status = "followup_1"
-    else:
-        status = "other"
+        # ===== المقارنة =====
+        for cid, data in current_map.items():
+            new_status = data["status"]
+            old_status = snapshot.get(cid, "other")
 
-    current_map[cid] = {
-        "status": status,
-        "type": comp_type
-    }
+            if old_status != "followup_2" and new_status == "followup_2":
+                add_notification(cid, data["type"], "جاهز للمتابعة 2")
 
-except Exception as e:
-    print(e)
+        # ===== تحديث الحالة =====
+        set_followup2_snapshot(current_map)
+
+    except Exception as e:
+        st.error(f"خطأ في check_followup2: {e}")
+
 # ======================================================
 # ====== عرض الإشعارات في الشريط الجانبي ======
 # ======================================================
