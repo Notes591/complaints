@@ -53,15 +53,7 @@ snapshots_sheet        = sheets_dict["Snapshots"]
 st.set_page_config(page_title="📢 نظام الشكاوى", page_icon="⚠️", layout="wide")
 
 # ======================================================
-# ====== counter عشان كل form له key فريد ======
-if "form_counter" not in st.session_state:
-    st.session_state["form_counter"] = 0
 
-def next_form_key(base):
-    st.session_state["form_counter"] += 1
-    return f"{base}_{st.session_state['form_counter']}"
-
-# ====== دوال Retry ======
 # ======================================================
 def safe_append(sheet, row_data, retries=5, delay=1):
     for attempt in range(retries):
