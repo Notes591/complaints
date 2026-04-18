@@ -10,7 +10,7 @@ import xml.etree.ElementTree as ET
 import re
 from streamlit_autorefresh import st_autorefresh
 
-# ====== تحديث تلقائي كل دقيقة عشان الإشعارات تتحدث ======
+# ====== تحديث تلقائي كل دقيقة ======
 st_autorefresh(interval=60000, key="auto_refresh")
 
 # ====== الاتصال بجوجل شيت ======
@@ -24,7 +24,7 @@ SHEET_NAME = "Complaints"
 sheet_titles = [
     "Complaints", "Responded", "Archive", "Types",
     "معلق ارامكس", "أرشيف أرامكس", "ReturnWarehouse", "Order Number",
-    "Notifications"  # ورقة جديدة للإشعارات
+    "Notifications"
 ]
 
 sheets_dict = {}
@@ -39,27 +39,30 @@ for title in sheet_titles:
             st.error(f"خطأ في الوصول/إنشاء ورقة: {title} - {e2}")
             raise
 
-complaints_sheet     = sheets_dict["Complaints"]
-responded_sheet      = sheets_dict["Responded"]
-archive_sheet        = sheets_dict["Archive"]
-types_sheet          = sheets_dict["Types"]
-aramex_sheet         = sheets_dict["معلق ارامكس"]
-aramex_archive       = sheets_dict["أرشيف أرامكس"]
+complaints_sheet       = sheets_dict["Complaints"]
+responded_sheet        = sheets_dict["Responded"]
+archive_sheet          = sheets_dict["Archive"]
+types_sheet            = sheets_dict["Types"]
+aramex_sheet           = sheets_dict["معلق ارامكس"]
+aramex_archive         = sheets_dict["أرشيف أرامكس"]
 return_warehouse_sheet = sheets_dict["ReturnWarehouse"]
-order_number_sheet   = sheets_dict["Order Number"]
-notifications_sheet  = sheets_dict["Notifications"]
+order_number_sheet     = sheets_dict["Order Number"]
+notifications_sheet    = sheets_dict["Notifications"]
 
 # ====== إعدادات الصفحة ======
 st.set_page_config(page_title="📢 نظام الشكاوى", page_icon="⚠️", layout="wide")
 
-# ====== دوال Retry ======
+# ======================================================
+# ====== دوال Retry مع Exponential Backoff ======
+# ======================================================
 def safe_append(sheet, row_data, retries=5, delay=1):
     for attempt in range(retries):
         try:
             sheet.append_row(row_data)
             return True
-        except gspread.exceptions.APIError:
-            time.sleep(delay)
+        except gspread.exceptions.APIError as e:
+            wait = delay * (attempt + 1)
+            time.sleep(wait)
         except Exception:
             time.sleep(delay)
     st.error("❌ فشل append_row بعد عدة محاولات.")
@@ -70,8 +73,9 @@ def safe_update(sheet, cell_range, values, retries=5, delay=1):
         try:
             sheet.update(cell_range, values)
             return True
-        except gspread.exceptions.APIError:
-            time.sleep(delay)
+        except gspread.exceptions.APIError as e:
+            wait = delay * (attempt + 1)
+            time.sleep(wait)
         except Exception:
             time.sleep(delay)
     st.error("❌ فشل update بعد عدة محاولات.")
@@ -82,8 +86,9 @@ def safe_delete(sheet, row_index, retries=5, delay=1):
         try:
             sheet.delete_rows(row_index)
             return True
-        except gspread.exceptions.APIError:
-            time.sleep(delay)
+        except gspread.exceptions.APIError as e:
+            wait = delay * (attempt + 1)
+            time.sleep(wait)
         except Exception:
             time.sleep(delay)
     st.error("❌ فشل delete_rows بعد عدة محاولات.")
@@ -92,26 +97,23 @@ def safe_delete(sheet, row_index, retries=5, delay=1):
 # ======================================================
 # ====== نظام الإشعارات ======
 # ======================================================
-# الأعمدة في ورقة Notifications:
-# A: notification_id | B: order_id | C: comp_type | D: action_done | E: timestamp | F: is_read
-
 NOTIF_ICON = {
-    "إضافة شكوى جديدة": "➕",
-    "تعديل شكوى": "✏️",
-    "حفظ شكوى": "💾",
-    "أرشفة شكوى": "📦",
-    "حذف شكوى": "🗑️",
-    "نقل للمردودة": "➡️",
-    "رجوع للنشطة": "⬅️",
+    "إضافة شكوى جديدة":         "➕",
+    "تعديل شكوى":               "✏️",
+    "حفظ شكوى":                 "💾",
+    "أرشفة شكوى":               "📦",
+    "حذف شكوى":                 "🗑️",
+    "نقل للمردودة":              "➡️",
+    "رجوع للنشطة":              "⬅️",
     "طلب جديد في ReturnWarehouse": "🆕",
-    "إضافة معلق أرامكس": "🚚",
-    "تعديل معلق أرامكس": "✏️",
-    "أرشفة معلق أرامكس": "📦",
+    "إضافة معلق أرامكس":        "🚚",
+    "تعديل معلق أرامكس":        "✏️",
+    "أرشفة معلق أرامكس":        "📦",
 }
 
 def add_notification(order_id, comp_type, action_done):
     """يحفظ إشعار جديد في ورقة Notifications"""
-    notif_id = f"N{int(time.time()*1000)}"
+    notif_id  = f"N{int(time.time()*1000)}"
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     safe_append(notifications_sheet, [notif_id, str(order_id), str(comp_type), str(action_done), timestamp, "unread"])
 
@@ -119,69 +121,77 @@ def get_notifications():
     """يجيب كل الإشعارات من الورقة"""
     try:
         all_rows = notifications_sheet.get_all_values()
-        # لو الورقة فاضية أو عندها header بس
-        if len(all_rows) == 0:
+        if not all_rows:
             return []
-        # نتجاهل أي header لو موجود (نشوف لو الصف الأول = header)
         data_rows = []
         for i, row in enumerate(all_rows):
             if len(row) < 5:
                 continue
-            # نتخطى الـ header لو موجود
             if row[0] == "notification_id":
                 continue
             data_rows.append({
-                "row_index": i + 1,  # 1-based
-                "notif_id": row[0],
-                "order_id": row[1],
-                "comp_type": row[2],
+                "row_index": i + 1,
+                "notif_id":   row[0],
+                "order_id":   row[1],
+                "comp_type":  row[2],
                 "action_done": row[3],
-                "timestamp": row[4],
-                "is_read": row[5] if len(row) > 5 else "unread"
+                "timestamp":  row[4],
+                "is_read":    row[5] if len(row) > 5 else "unread"
             })
-        # الأحدث أولاً
         data_rows.reverse()
         return data_rows
     except Exception:
         return []
 
 def mark_all_read():
-    """يعلّم كل الإشعارات كـ مقروءة"""
+    """يعلّم كل الإشعارات كـ مقروءة - batch واحد بدل calls متعددة"""
     try:
         all_rows = notifications_sheet.get_all_values()
-        updates = []
+        batch_data = []
         for i, row in enumerate(all_rows):
             if len(row) >= 6 and row[5] == "unread":
-                updates.append({
-                    "range": f"F{i+1}",
+                batch_data.append({
+                    "range":  f"F{i+1}",
                     "values": [["read"]]
                 })
-        if updates:
-            for u in updates:
-                safe_update(notifications_sheet, u["range"], u["values"])
-    except Exception:
-        pass
+        if batch_data:
+            notifications_sheet.batch_update(batch_data)
+    except Exception as e:
+        st.error(f"خطأ في تعليم المقروء: {e}")
 
 def clear_all_notifications():
-    """يحذف كل الإشعارات"""
+    """يحذف كل الإشعارات دفعة واحدة"""
     try:
-        all_rows = notifications_sheet.get_all_values()
-        # نحذف من الأسفل للأعلى عشان ما يختل ترقيم الصفوف
-        for i in range(len(all_rows), 0, -1):
-            safe_delete(notifications_sheet, i)
-    except Exception:
-        pass
+        # نحفظ قيمة الـ pointer أولاً
+        pointer_val = ""
+        try:
+            pointer_val = notifications_sheet.acell(RW_POINTER_CELL).value or ""
+        except Exception:
+            pass
+
+        # نمسح كل شيء دفعة واحدة
+        notifications_sheet.clear()
+
+        # نعيد الـ pointer إذا كان موجوداً
+        if pointer_val:
+            notifications_sheet.update(RW_POINTER_CELL, [[pointer_val]])
+    except Exception as e:
+        st.error(f"خطأ في مسح الإشعارات: {e}")
 
 # ====== عرض الإشعارات في الشريط الجانبي ======
 def render_notifications_sidebar():
     notifications = get_notifications()
-    unread_count = sum(1 for n in notifications if n["is_read"] == "unread")
+    unread_count  = sum(1 for n in notifications if n["is_read"] == "unread")
 
     with st.sidebar:
         st.markdown("---")
-        # عنوان مع عداد
         if unread_count > 0:
-            st.markdown(f"### 🔔 الإشعارات &nbsp; <span style='background:#e74c3c;color:white;border-radius:50%;padding:2px 8px;font-size:14px;'>{unread_count}</span>", unsafe_allow_html=True)
+            st.markdown(
+                f"### 🔔 الإشعارات &nbsp; "
+                f"<span style='background:#e74c3c;color:white;border-radius:50%;padding:2px 8px;font-size:14px;'>"
+                f"{unread_count}</span>",
+                unsafe_allow_html=True
+            )
         else:
             st.markdown("### 🔔 الإشعارات")
 
@@ -199,11 +209,11 @@ def render_notifications_sidebar():
             st.info("لا توجد إشعارات")
             return
 
-        for notif in notifications[:50]:  # نعرض آخر 50 إشعار
-            icon = NOTIF_ICON.get(notif["action_done"], "🔔")
-            is_new = notif["is_read"] == "unread"
+        for notif in notifications[:50]:
+            icon    = NOTIF_ICON.get(notif["action_done"], "🔔")
+            is_new  = notif["is_read"] == "unread"
             bg_color = "#fff3cd" if is_new else "#f8f9fa"
-            border = "2px solid #ffc107" if is_new else "1px solid #dee2e6"
+            border   = "2px solid #ffc107" if is_new else "1px solid #dee2e6"
             new_badge = " 🆕" if is_new else ""
 
             st.markdown(f"""
@@ -227,52 +237,63 @@ def render_notifications_sidebar():
 # ====== مراقبة ReturnWarehouse للإشعارات التلقائية ======
 # ======================================================
 def clean_id(val):
-    """ينظف رقم الطلب من المسافات والرموز الخفية والـ unicode غير المرئي"""
     if not val:
         return ""
     cleaned = str(val).strip()
     cleaned = re.sub(r'[\u200b\u200c\u200d\u00a0\ufeff\u202a-\u202e]', '', cleaned)
     return cleaned.strip()
 
-# ====== خلية ثابتة نحفظ فيها آخر صف تم فحصه في ReturnWarehouse ======
-# نستخدم خلية Z1 في ورقة Notifications كـ "pointer" - call واحد للقراءة وcall واحد للكتابة
 RW_POINTER_CELL = "Z1"
 
 def get_rw_pointer():
-    """يقرأ آخر رقم صف تم فحصه - call واحد خفيف جداً"""
+    """يقرأ آخر رقم صف تم فحصه - call واحد خفيف"""
     try:
         val = notifications_sheet.acell(RW_POINTER_CELL).value
         if val and str(val).strip().isdigit():
             return int(val)
-        return None  # None = أول تشغيل
+        return None
     except Exception:
         return None
 
 def set_rw_pointer(row_num):
     """يحفظ آخر رقم صف تم فحصه - call واحد خفيف"""
     try:
-        safe_update(notifications_sheet, RW_POINTER_CELL, [[str(row_num)]])
+        notifications_sheet.update(RW_POINTER_CELL, [[str(row_num)]])
     except Exception:
         pass
 
+# ====== Cache للقراءات الثقيلة - يقلل API calls بشكل كبير ======
+@st.cache_data(ttl=55)
+def get_active_complaint_ids():
+    """يجيب كل أرقام الشكاوي من الأوراق الثلاث - cached 55 ثانية"""
+    active_ids = set()
+    for sheet_obj in [complaints_sheet, responded_sheet, archive_sheet]:
+        try:
+            col = sheet_obj.col_values(1)
+            for v in col[1:]:
+                cid = clean_id(v)
+                if cid:
+                    active_ids.add(cid)
+        except Exception:
+            pass
+    return active_ids
+
 def check_returnwarehouse_new_orders():
     """
-    منطق المراقبة بدون تأخير:
-    - يقرأ الـ pointer من خلية Z1 (call خفيف)
-    - لو مفيش pointer (أول تشغيل): يقرأ عمود A بس عشان يحفظ العدد ويخرج
-    - لو في pointer: يقرأ عمود A بس ويشوف الجديد من بعد الـ pointer
-    - مش بيقرأ الشيت كله أبداً
+    مراقبة ReturnWarehouse بأقل عدد ممكن من API calls:
+    - يقرأ الـ pointer من Z1 (call واحد خفيف)
+    - أول تشغيل: يحفظ العدد الحالي ويخرج بدون إشعارات
+    - بعد كده: يقرأ عمود A بس ويشوف الجديد
+    - يستخدم cached IDs بدل قراءة 3 sheets في كل مرة
     """
     try:
-        pointer = get_rw_pointer()  # call واحد خفيف
+        pointer = get_rw_pointer()
 
-        # نقرأ عمود A بس (أسرع بكتير من get_all_values)
-        col_a = return_warehouse_sheet.col_values(1)
-        # نشيل الهيدر ونظف ونشيل الفراغات
+        col_a     = return_warehouse_sheet.col_values(1)
         real_rows = [clean_id(v) for v in col_a[1:] if clean_id(v) != ""]
         current_count = len(real_rows)
 
-        # أول تشغيل: نحفظ العدد الحالي كـ pointer ونخرج بدون إشعارات
+        # أول تشغيل: نحفظ العدد الحالي كـ pointer ونخرج
         if pointer is None:
             set_rw_pointer(current_count)
             return
@@ -281,22 +302,10 @@ def check_returnwarehouse_new_orders():
         if current_count <= pointer:
             return
 
-        # في صفوف جديدة - نجيب أرقام الطلبات الجديدة بس
+        # في صفوف جديدة
         new_order_ids = real_rows[pointer:]
+        active_ids    = get_active_complaint_ids()  # من الـ cache
 
-        # نجيب أرقام الشكاوي من عمود A بس (أسرع)
-        active_ids = set()
-        for sheet_obj in [complaints_sheet, responded_sheet, archive_sheet]:
-            try:
-                col = sheet_obj.col_values(1)
-                for v in col[1:]:
-                    cid = clean_id(v)
-                    if cid:
-                        active_ids.add(cid)
-            except Exception:
-                pass
-
-        # نبعت إشعار لكل طلب جديد موجود في الشكاوي
         for order_id in new_order_ids:
             if order_id in active_ids:
                 add_notification(
@@ -305,21 +314,20 @@ def check_returnwarehouse_new_orders():
                     action_done="طلب جديد في ReturnWarehouse"
                 )
 
-        # نحدث الـ pointer
         set_rw_pointer(current_count)
 
     except Exception:
         pass
 
-# ====== تشغيل مراقبة ReturnWarehouse ======
+# ====== تشغيل المراقبة والإشعارات ======
 check_returnwarehouse_new_orders()
-
-# ====== عرض الإشعارات في الشريط الجانبي ======
 render_notifications_sidebar()
 
-# ====== تحميل الأنواع ======
+# ======================================================
+# ====== تحميل البيانات المساعدة ======
+# ======================================================
 try:
-    types_list = [row[0] for row in types_sheet.get_all_values()[1:]]
+    types_list = [row[0] for row in types_sheet.get_all_values()[1:] if row]
 except Exception:
     types_list = []
 
@@ -359,14 +367,16 @@ def get_order_status(order_id):
                 return "الطلب الاساسي⏳ تحت المتابعة"
     return "⏳ تحت المتابعة"
 
-# ====== إعداد Aramex ======
+# ======================================================
+# ====== إعداد أرامكس ======
+# ======================================================
 client_info = {
-    "UserName": "fitnessworld525@gmail.com",
-    "Password": "Aa12345678@",
-    "Version": "v1",
-    "AccountNumber": "71958996",
-    "AccountPin": "657448",
-    "AccountEntity": "RUH",
+    "UserName":           "fitnessworld525@gmail.com",
+    "Password":           "Aa12345678@",
+    "Version":            "v1",
+    "AccountNumber":      "71958996",
+    "AccountPin":         "657448",
+    "AccountEntity":      "RUH",
     "AccountCountryCode": "SA"
 }
 
@@ -378,29 +388,29 @@ def remove_xml_namespaces(xml_str):
 def extract_reference(tracking_result):
     for ref_tag in ['Reference1','Reference2','Reference3','Reference4','Reference5']:
         ref_elem = tracking_result.find(ref_tag)
-        if ref_elem is not None and ref_elem.text and ref_elem.text.strip() != "":
+        if ref_elem is not None and ref_elem.text and ref_elem.text.strip():
             return ref_elem.text.strip()
     return ""
 
-def get_aramex_status(awb_number, search_type="Waybill"):
+def get_aramex_status(awb_number):
     try:
-        headers = {"Content-Type": "application/json"}
         payload = {
             "ClientInfo": client_info,
-            "Shipments": [awb_number],
+            "Shipments":  [awb_number],
             "Transaction": {"Reference1":"","Reference2":"","Reference3":"","Reference4":"","Reference5":""},
-            "LabelInfo": None
+            "LabelInfo":  None
         }
-        url = "https://ws.aramex.net/ShippingAPI.V2/Tracking/Service_1_0.svc/json/TrackShipments"
-        response = requests.post(url, json=payload, headers=headers, timeout=10)
+        url      = "https://ws.aramex.net/ShippingAPI.V2/Tracking/Service_1_0.svc/json/TrackShipments"
+        response = requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=10)
         if response.status_code != 200:
             return f"❌ فشل الاتصال - كود {response.status_code}"
-        xml_content = response.content.decode('utf-8')
-        xml_content = remove_xml_namespaces(xml_content)
-        root = ET.fromstring(xml_content)
+
+        xml_content = remove_xml_namespaces(response.content.decode('utf-8'))
+        root        = ET.fromstring(xml_content)
         tracking_results = root.find('TrackingResults')
         if tracking_results is None or len(tracking_results) == 0:
             return "❌ لا توجد حالة متاحة"
+
         keyvalue = tracking_results.find('KeyValueOfstringArrayOfTrackingResultmFAkxlpY')
         if keyvalue is not None:
             tracking_array = keyvalue.find('Value')
@@ -412,11 +422,11 @@ def get_aramex_status(awb_number, search_type="Waybill"):
                         key=lambda tr: tr.find('UpdateDateTime').text if tr.find('UpdateDateTime') is not None else '',
                         reverse=True
                     )[0]
-                    desc  = last_track.find('UpdateDescription').text if last_track.find('UpdateDescription') is not None else "—"
-                    date  = last_track.find('UpdateDateTime').text if last_track.find('UpdateDateTime') is not None else "—"
-                    loc   = last_track.find('UpdateLocation').text if last_track.find('UpdateLocation') is not None else "—"
+                    desc      = last_track.find('UpdateDescription').text if last_track.find('UpdateDescription') is not None else "—"
+                    date      = last_track.find('UpdateDateTime').text    if last_track.find('UpdateDateTime')    is not None else "—"
+                    loc       = last_track.find('UpdateLocation').text    if last_track.find('UpdateLocation')    is not None else "—"
                     reference = extract_reference(last_track)
-                    info = f"{desc} بتاريخ {date} في {loc}"
+                    info      = f"{desc} بتاريخ {date} في {loc}"
                     if reference:
                         info += f" | الرقم المرجعي: {reference}"
                     return info
@@ -430,13 +440,15 @@ def cached_aramex_status(awb):
         return ""
     return get_aramex_status(awb)
 
-# ====== دالة عرض الشكوى مع إشعارات ======
+# ======================================================
+# ====== دالة عرض الشكوى ======
+# ======================================================
 def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
     while len(row) < 8:
         row.append("")
 
     comp_id, comp_type, notes, action, date_added = row[:5]
-    restored    = row[5] if len(row) > 5 else ""
+    restored     = row[5] if len(row) > 5 else ""
     outbound_awb = row[6] if len(row) > 6 else ""
     inbound_awb  = row[7] if len(row) > 7 else ""
 
@@ -462,9 +474,9 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
                     f"البيان: {rw_record['البيان']}"
                 )
 
-            new_type   = st.selectbox("✏️ عدل نوع الشكوى", [comp_type] + [t for t in types_list if t != comp_type], index=0)
-            new_notes  = st.text_area("✏️ عدل الملاحظات", value=notes)
-            new_action = st.text_area("✏️ عدل الإجراء", value=action)
+            new_type     = st.selectbox("✏️ عدل نوع الشكوى", [comp_type] + [t for t in types_list if t != comp_type], index=0)
+            new_notes    = st.text_area("✏️ عدل الملاحظات", value=notes)
+            new_action   = st.text_area("✏️ عدل الإجراء", value=action)
             new_outbound = st.text_input("✏️ Outbound AWB", value=outbound_awb)
             new_inbound  = st.text_input("✏️ Inbound AWB", value=inbound_awb)
 
@@ -483,13 +495,16 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
                 submitted_move = col4.form_submit_button("⬅️ رجوع للنشطة")
 
             if submitted_save:
-                safe_update(sheet, f"B{i}", [[new_type]])
-                safe_update(sheet, f"C{i}", [[new_notes]])
-                safe_update(sheet, f"D{i}", [[new_action]])
-                safe_update(sheet, f"G{i}", [[new_outbound]])
-                safe_update(sheet, f"H{i}", [[new_inbound]])
-                add_notification(comp_id, new_type, "حفظ شكوى")
-                st.success("✅ تم التعديل")
+                ok = all([
+                    safe_update(sheet, f"B{i}", [[new_type]]),
+                    safe_update(sheet, f"C{i}", [[new_notes]]),
+                    safe_update(sheet, f"D{i}", [[new_action]]),
+                    safe_update(sheet, f"G{i}", [[new_outbound]]),
+                    safe_update(sheet, f"H{i}", [[new_inbound]]),
+                ])
+                if ok:
+                    add_notification(comp_id, new_type, "حفظ شكوى")
+                    st.success("✅ تم التعديل")
 
             if submitted_delete:
                 if safe_delete(sheet, i):
@@ -514,7 +529,9 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
                             add_notification(comp_id, new_type, "رجوع للنشطة")
                             st.success("✅ انتقلت للنشطة")
 
+# ======================================================
 # ====== العنوان الرئيسي ======
+# ======================================================
 st.title("⚠️ نظام إدارة الشكاوى")
 
 # ====== البحث عن شكوى ======
@@ -524,8 +541,8 @@ if search_id.strip():
     found = False
     for sheet_obj, in_responded, in_archive in [
         (complaints_sheet, False, False),
-        (responded_sheet, True, False),
-        (archive_sheet, False, True)
+        (responded_sheet,  True,  False),
+        (archive_sheet,    False, True)
     ]:
         try:
             data = sheet_obj.get_all_values()
@@ -545,10 +562,10 @@ if search_id.strip():
 # ====== تسجيل شكوى جديدة ======
 st.header("➕ تسجيل شكوى جديدة")
 with st.form("add_complaint", clear_on_submit=True):
-    comp_id   = st.text_input("🆔 رقم الشكوى")
-    comp_type = st.selectbox("📌 نوع الشكوى", ["اختر نوع الشكوى..."] + types_list, index=0)
-    notes     = st.text_area("📝 ملاحظات الشكوى")
-    action    = st.text_area("✅ الإجراء المتخذ")
+    comp_id      = st.text_input("🆔 رقم الشكوى")
+    comp_type    = st.selectbox("📌 نوع الشكوى", ["اختر نوع الشكوى..."] + types_list, index=0)
+    notes        = st.text_area("📝 ملاحظات الشكوى")
+    action       = st.text_area("✅ الإجراء المتخذ")
     outbound_awb = st.text_input("✏️ Outbound AWB")
     inbound_awb  = st.text_input("✏️ Inbound AWB")
     submitted    = st.form_submit_button("➕ إضافة")
@@ -568,7 +585,7 @@ with st.form("add_complaint", clear_on_submit=True):
             except Exception:
                 archive = []
 
-            date_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            date_now        = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             all_active_ids  = [str(c.get("ID","")) for c in complaints] + [str(r.get("ID","")) for r in responded]
             all_archive_ids = [str(a.get("ID","")) for a in archive]
 
@@ -577,9 +594,9 @@ with st.form("add_complaint", clear_on_submit=True):
             elif comp_id in all_archive_ids:
                 for idx, row in enumerate(archive_sheet.get_all_values()[1:], start=2):
                     if str(row[0]) == comp_id:
-                        restored_notes   = row[2] if len(row) > 2 else ""
-                        restored_action  = row[3] if len(row) > 3 else ""
-                        restored_type    = row[1] if len(row) > 1 else ""
+                        restored_notes    = row[2] if len(row) > 2 else ""
+                        restored_action   = row[3] if len(row) > 3 else ""
+                        restored_type     = row[1] if len(row) > 1 else ""
                         restored_outbound = row[6] if len(row) > 6 else ""
                         restored_inbound  = row[7] if len(row) > 7 else ""
                         if safe_append(complaints_sheet, [comp_id, restored_type, restored_notes, restored_action, date_now, "🔄 مسترجعة", restored_outbound, restored_inbound]):
@@ -655,13 +672,15 @@ if len(responded_notes) > 1:
 else:
     st.info("لا توجد شكاوى مردودة حالياً.")
 
+# ======================================================
 # ====== قسم معلق أرامكس ======
+# ======================================================
 st.markdown("---")
 st.header("🚚 معلق ارامكس")
 with st.form("add_aramex", clear_on_submit=True):
-    order_id = st.text_input("🔢 رقم الطلب")
-    status   = st.text_input("📌 الحالة")
-    action   = st.text_area("✅ الإجراء المتخذ")
+    order_id  = st.text_input("🔢 رقم الطلب")
+    status    = st.text_input("📌 الحالة")
+    action    = st.text_area("✅ الإجراء المتخذ")
     submitted = st.form_submit_button("➕ إضافة")
     if submitted:
         if order_id.strip() and status.strip() and action.strip():
@@ -696,14 +715,21 @@ if len(aramex_pending) > 1:
                 submitted_save    = col1.form_submit_button("💾 حفظ")
                 submitted_delete  = col2.form_submit_button("🗑️ حذف")
                 submitted_archive = col3.form_submit_button("📦 أرشفة")
+
                 if submitted_save:
-                    if safe_update(aramex_sheet, f"B{i}", [[new_status]]) and safe_update(aramex_sheet, f"D{i}", [[new_action]]):
+                    ok = all([
+                        safe_update(aramex_sheet, f"B{i}", [[new_status]]),
+                        safe_update(aramex_sheet, f"D{i}", [[new_action]]),
+                    ])
+                    if ok:
                         add_notification(order_id, "معلق أرامكس", "تعديل معلق أرامكس")
                         st.success("✅ تم تعديل الطلب")
+
                 if submitted_delete:
                     if safe_delete(aramex_sheet, i):
                         add_notification(order_id, "معلق أرامكس", "حذف شكوى")
                         st.warning("🗑️ تم حذف الطلب")
+
                 if submitted_archive:
                     if safe_append(aramex_archive, [order_id, new_status, date_added, new_action]):
                         if safe_delete(aramex_sheet, i):
