@@ -105,7 +105,7 @@ NOTIF_ICON = {
     "حذف شكوى":                   "🗑️",
     "نقل للمردودة":                "➡️",
     "رجوع للنشطة":                 "⬅️",
-    "وصل للمخزن":                  "🏭",
+    "جاهز للمتابعة 2":             "🏭",
     "إضافة معلق أرامكس":           "🚚",
     "تعديل معلق أرامكس":           "✏️",
     "أرشفة معلق أرامكس":           "📦",
@@ -175,98 +175,96 @@ def clear_all_notifications():
         pass
 
 # ======================================================
-# ====== نظام مراقبة المخزن (الفكرة الجديدة) ======
+# ====== مراقبة "جاهز للمتابعة 2" للإشعارات ======
 # ======================================================
-#
 # المنطق:
-# - عندنا snapshot محفوظ في Z1 = قائمة أرقام الطلبات اللي كانت في المخزن آخر مرة
-# - كل فتح للموقع:
-#     1. نقرأ عمود A من ReturnWarehouse (أرقام الطلبات الحالية)
-#     2. نقرأ الـ snapshot من Z1
-#     3. نقارن: أي رقم موجود دلوقتي بس مكانش في الـ snapshot = جديد
-#     4. لو الرقم الجديد ده عنده شكوى في Responded = نبعت إشعار "وصل للمخزن"
-#     5. نحدث الـ snapshot بالقائمة الحالية
-#
-# الميزة: مش بنتابع عدد الصفوف، بنتابع أرقام الطلبات نفسها
-# حتى لو حد حذف صف وأضاف غيره، هيتعرف عليه صح
+# - كل فتح للموقع نحسب مين في followup_2 (Delivered + في المخزن)
+# - نقارن بالـ snapshot المحفوظ في Z1
+# - أي رقم جديد دخل followup_2 = إشعار "جاهز للمتابعة 2"
+# - نحدث Z1 بالقائمة الحالية
 # ======================================================
 
-SNAPSHOT_CELL = "Z1"  # خلية في ورقة Notifications نحفظ فيها الـ snapshot
+FOLLOWUP2_SNAPSHOT_CELL = "Z1"
 
-def get_rw_snapshot():
-    """يقرأ الـ snapshot من Z1 - مجموعة أرقام الطلبات اللي كانت في المخزن"""
+def get_followup2_snapshot():
+    """يقرأ أرقام الطلبات اللي كانت في followup_2 آخر مرة"""
     try:
-        val = notifications_sheet.acell(SNAPSHOT_CELL).value
+        val = notifications_sheet.acell(FOLLOWUP2_SNAPSHOT_CELL).value
         if val and val.strip():
-            ids = {clean_id(x) for x in val.split(",") if clean_id(x)}
-            return ids
+            return {clean_id(x) for x in val.split(",") if clean_id(x)}
         return None  # None = أول تشغيل
     except Exception:
         return None
 
-def set_rw_snapshot(ids_set):
-    """يحفظ الـ snapshot في Z1 كـ string مفصول بفواصل"""
+def set_followup2_snapshot(ids_set):
+    """يحفظ الـ snapshot"""
     try:
-        val = ",".join(sorted(ids_set))
-        safe_update(notifications_sheet, SNAPSHOT_CELL, [[val]])
+        safe_update(notifications_sheet, FOLLOWUP2_SNAPSHOT_CELL, [[",".join(sorted(ids_set))]])
     except Exception:
         pass
 
-def check_returnwarehouse_notifications():
+def check_followup2_notifications():
     """
-    يقارن أرقام طلبات المخزن الحالية بالـ snapshot المحفوظ.
-    أي رقم جديد عنده شكوى في المردودة يطلع إشعار 'وصل للمخزن'.
+    يحسب مين في followup_2 دلوقتي ويقارن بالـ snapshot.
+    followup_2 = شكوى في المردودة + Delivered عند أرامكس + موجودة في ReturnWarehouse
     """
     try:
-        # 1. نقرأ الـ snapshot (call خفيف - خلية واحدة)
-        snapshot = get_rw_snapshot()
+        snapshot = get_followup2_snapshot()
 
-        # 2. نقرأ عمود A من المخزن بس (أسرع من get_all_values)
-        col_a = return_warehouse_sheet.col_values(1)
-        current_ids = {clean_id(v) for v in col_a[1:] if clean_id(v)}
+        # نجيب المردودة
+        responded_rows = responded_sheet.get_all_values()
+        if len(responded_rows) <= 1:
+            if snapshot is None:
+                set_followup2_snapshot(set())
+            return
 
-        # 3. أول تشغيل: نحفظ الـ snapshot ونخرج بدون إشعارات
+        # نحسب followup_2 الحالية
+        current_followup2 = set()
+        for row in responded_rows[1:]:
+            while len(row) < 8:
+                row.append("")
+            cid          = clean_id(row[0])
+            outbound_awb = row[6]
+            inbound_awb  = row[7]
+            if not cid:
+                continue
+            # نشوف لو delivered
+            delivered = False
+            for awb in [outbound_awb, inbound_awb]:
+                if awb and "Delivered" in cached_aramex_status(awb):
+                    delivered = True
+                    break
+            if not delivered:
+                continue
+            # نشوف لو في المخزن
+            if get_returnwarehouse_record(cid):
+                current_followup2.add(cid)
+
+        # أول تشغيل: نحفظ ونخرج
         if snapshot is None:
-            set_rw_snapshot(current_ids)
+            set_followup2_snapshot(current_followup2)
             return
 
-        # 4. نشوف الجديد = موجود دلوقتي بس مكانش في الـ snapshot
-        new_ids = current_ids - snapshot
+        # الجديد = دخل followup_2 وما كانش فيها
+        newly_in_followup2 = current_followup2 - snapshot
+        for order_id in newly_in_followup2:
+            # نجيب نوع الشكوى
+            comp_type = ""
+            for row in responded_rows[1:]:
+                if clean_id(row[0]) == order_id and len(row) > 1:
+                    comp_type = row[1]
+                    break
+            add_notification(order_id, comp_type, "جاهز للمتابعة 2")
 
-        if not new_ids:
-            # نحدث الـ snapshot لو في حاجة اتحذفت (عشان يبقى محدث دايماً)
-            if current_ids != snapshot:
-                set_rw_snapshot(current_ids)
-            return
-
-        # 5. نجيب أرقام الشكاوي المردودة بس (عمود A بس - أسرع)
-        responded_ids = set()
-        try:
-            col = responded_sheet.col_values(1)
-            for v in col[1:]:
-                cid = clean_id(v)
-                if cid:
-                    responded_ids.add(cid)
-        except Exception:
-            pass
-
-        # 6. نبعت إشعار لكل طلب جديد في المخزن وعنده شكوى في المردودة
-        for order_id in new_ids:
-            if order_id in responded_ids:
-                add_notification(
-                    order_id=order_id,
-                    comp_type="Returned Warehouse",
-                    action_done="وصل للمخزن"
-                )
-
-        # 7. نحدث الـ snapshot
-        set_rw_snapshot(current_ids)
+        # نحدث الـ snapshot
+        if current_followup2 != snapshot:
+            set_followup2_snapshot(current_followup2)
 
     except Exception:
         pass
 
-# ====== تشغيل مراقبة المخزن ======
-check_returnwarehouse_notifications()
+# ====== تشغيل مراقبة followup_2 ======
+check_followup2_notifications()
 
 # ======================================================
 # ====== عرض الإشعارات في الشريط الجانبي ======
