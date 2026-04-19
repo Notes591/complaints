@@ -56,7 +56,6 @@ st.set_page_config(page_title="📢 نظام الشكاوى", page_icon="⚠️"
 
 # ======================================================
 
-# ======================================================
 def safe_append(sheet, row_data, retries=5, delay=1):
     for attempt in range(retries):
         try:
@@ -96,10 +95,6 @@ def safe_delete(sheet, row_index, retries=5, delay=1):
 # ======================================================
 # ====== نظام الإشعارات ======
 # ======================================================
-# ورقة Notifications:
-# A: notif_id | B: order_id | C: comp_type | D: action_done | E: timestamp | F: is_read
-# Z1: snapshot لأرقام الطلبات اللي سجلها المخزن آخر مرة (مفصولة بفاصلة)
-
 NOTIF_ICON = {
     "إضافة شكوى جديدة":          "➕",
     "حفظ شكوى":                   "💾",
@@ -114,7 +109,6 @@ NOTIF_ICON = {
 }
 
 def clean_id(val):
-    """ينظف رقم الطلب من المسافات والرموز الخفية"""
     if not val:
         return ""
     cleaned = str(val).strip()
@@ -135,9 +129,8 @@ def get_notifications():
         for i, row in enumerate(all_rows):
             if len(row) < 5:
                 continue
-            if row[0] in ("notification_id", "") :
+            if row[0] in ("notification_id", ""):
                 continue
-            # نتجاهل صف Z1 (بيانات الـ snapshot - مش إشعار)
             if row[0].startswith("SNAP"):
                 continue
             data_rows.append({
@@ -164,88 +157,76 @@ def mark_all_read():
         pass
 
 def clear_all_notifications():
-    """يمسح إشعارات بس ويحتفظ بالـ snapshot في Z1"""
     try:
         all_rows = notifications_sheet.get_all_values()
         for i in range(len(all_rows), 0, -1):
             row = all_rows[i-1]
-            # نحافظ على الـ snapshot ولا نحذفه
             if len(row) > 0 and row[0].startswith("SNAP"):
                 continue
             safe_delete(notifications_sheet, i)
     except Exception:
         pass
 
+def mark_single_read(notif_id):
+    try:
+        all_rows = notifications_sheet.get_all_values()
+        for i, row in enumerate(all_rows):
+            if len(row) >= 1 and row[0] == notif_id:
+                safe_update(notifications_sheet, f"F{i+1}", [["read"]])
+                return
+    except Exception:
+        pass
+
+def delete_single_notification(notif_id):
+    try:
+        all_rows = notifications_sheet.get_all_values()
+        for i, row in enumerate(all_rows):
+            if len(row) >= 1 and row[0] == notif_id:
+                safe_delete(notifications_sheet, i+1)
+                return
+    except Exception:
+        pass
+
 # ======================================================
 # ====== مراقبة "جاهز للمتابعة 2" للإشعارات ======
 # ======================================================
-# المنطق:
-# - كل فتح للموقع نشوف مين في followup_2 (Delivered + في المخزن)
-# - نقارن بـ snapshot محفوظ في Z1 في ورقة Notifications
-# - اللي كان في others/followup_1 وبقى followup_2 = إشعار
-# - الإشعار بيجي بس عند فتح الموقع مش autorefresh
-# ======================================================
-
-# ======================================================
-
-# ====== Snapshot (نسخة الحالة الكاملة) ======
 
 def set_followup2_snapshot(data):
     try:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
         serialized = "|".join([f"{k}:{v['status']}" for k, v in data.items()])
-
         rows = snapshots_sheet.get_all_values()
-
         for i, row in enumerate(rows, start=1):
             if len(row) > 0 and row[0] == "followup2":
                 snapshots_sheet.update(f"A{i}:C{i}", [["followup2", serialized, timestamp]])
                 return
-
         snapshots_sheet.append_row(["followup2", serialized, timestamp])
-
     except Exception:
         pass
-
 
 def get_followup2_snapshot():
     try:
         rows = snapshots_sheet.get_all_values()
-
         for row in rows:
             if len(row) > 1 and row[0] == "followup2":
                 val = row[1]
-
                 result = {}
                 if val:
                     for p in val.split("|"):
                         if ":" in p:
                             k, v = p.split(":", 1)
                             result[clean_id(k)] = v
-
                 return result
-
         return None
     except Exception:
         return None
 
-
-# ====== check_followup2 (المعدل بالكامل) ======
-
 def check_followup2_notifications():
-
     try:
         snapshot = get_followup2_snapshot()
-
         responded_rows = responded_sheet.get_all_values()
-
         if len(responded_rows) <= 1:
             return
-
-        # =========================
-        # تحميل أرقام المخزن
-        # =========================
         try:
             rw_ids = {
                 clean_id(v)
@@ -257,172 +238,187 @@ def check_followup2_notifications():
 
         current_map = {}
 
-        # =========================
-        # فحص كل الشكاوى المردودة
-        # =========================
         for row in responded_rows[1:]:
-
             while len(row) < 8:
                 row.append("")
-
-            cid = clean_id(row[0])
-
+            cid          = clean_id(row[0])
             if not cid:
                 continue
-
-            comp_type = row[1]
-
+            comp_type    = row[1]
             outbound_awb = str(row[6]).strip()
             inbound_awb  = str(row[7]).strip()
+            delivered    = False
 
-            delivered = False
-
-            # ==================================
-            # إجبار تحميل حالة أرامكس لو مش موجودة
-            # ==================================
             for awb in [outbound_awb, inbound_awb]:
-
                 if not awb:
                     continue
-
                 cache_key = f"aramex_cache_{awb}"
-
                 if cache_key not in st.session_state:
-                    # لو مش موجودة هنجلبها ونخزنها
                     status = cached_aramex_status(awb)
                 else:
                     status = st.session_state[cache_key]
-
                 if status:
-
                     s = status.lower()
-
-                    if (
-                        "delivered" in s
-                        or "تم التسليم" in s
-                    ):
+                    if "delivered" in s or "تم التسليم" in s:
                         delivered = True
                         break
 
-            # =========================
-            # تحديد الحالة
-            # =========================
             in_rw = cid in rw_ids
 
             if delivered and in_rw:
                 new_status = "followup_2"
-
             elif delivered and not in_rw:
                 new_status = "followup_1"
-
             else:
                 new_status = "other"
 
             current_map[cid] = {
                 "status": new_status,
-                "type": comp_type
+                "type":   comp_type
             }
 
-        # ===================================
-        # أول تشغيل: فقط نحفظ snapshot
-        # ===================================
         if snapshot is None:
-
             set_followup2_snapshot(current_map)
-
             return
 
-        # ===================================
-        # المقارنة:
-        # لو كان قبل كده مش followup_2
-        # وبقى دلوقتي followup_2
-        # طلع إشعار
-        # ===================================
         for cid, data in current_map.items():
-
             old_status = snapshot.get(cid, "other")
-
             new_status = data["status"]
+            if old_status != "followup_2" and new_status == "followup_2":
+                add_notification(cid, data["type"], "جاهز للمتابعة 2")
 
-            if (
-                old_status != "followup_2"
-                and new_status == "followup_2"
-            ):
-
-                add_notification(
-                    cid,
-                    data["type"],
-                    "جاهز للمتابعة 2"
-                )
-
-        # =========================
-        # تحديث snapshot الجديد
-        # =========================
         set_followup2_snapshot(current_map)
 
     except Exception as e:
+        st.error(f"خطأ في check_followup2: {e}")
 
-        st.error(
-            f"خطأ في check_followup2: {e}"
-        )
 # ======================================================
 # ====== عرض الإشعارات في الشريط الجانبي ======
 # ======================================================
 def render_notifications_sidebar():
     notifications = get_notifications()
-    unread_count  = sum(1 for n in notifications if n["is_read"] == "unread")
+
+    # تقسيم الإشعارات: مخزن vs باقي
+    warehouse_notifs = [n for n in notifications if n["action_done"] == "جاهز للمتابعة 2"]
+    other_notifs     = [n for n in notifications if n["action_done"] != "جاهز للمتابعة 2"]
+
+    unread_other     = sum(1 for n in other_notifs     if n["is_read"] == "unread")
+    unread_warehouse = sum(1 for n in warehouse_notifs if n["is_read"] == "unread")
 
     with st.sidebar:
+
+        # ====== قسم الإشعارات العامة ======
         st.markdown("---")
-        if unread_count > 0:
+        if unread_other > 0:
             st.markdown(
                 f"### 🔔 الإشعارات &nbsp;"
                 f"<span style='background:#e74c3c;color:white;border-radius:50%;"
-                f"padding:2px 8px;font-size:14px;'>{unread_count}</span>",
+                f"padding:2px 8px;font-size:14px;'>{unread_other}</span>",
                 unsafe_allow_html=True
             )
         else:
             st.markdown("### 🔔 الإشعارات")
 
         col_a, col_b = st.columns(2)
-        if col_a.button("✅ تعليم الكل مقروء", use_container_width=True):
+        if col_a.button("✅ تعليم الكل مقروء", key="mark_all_read_btn", use_container_width=True):
             mark_all_read()
             st.rerun()
-        if col_b.button("🗑️ مسح الكل", use_container_width=True):
+        if col_b.button("🗑️ مسح الكل", key="clear_all_btn", use_container_width=True):
             clear_all_notifications()
             st.rerun()
 
         st.markdown("---")
 
-        if not notifications:
+        if not other_notifs:
             st.info("لا توجد إشعارات")
-            return
+        else:
+            for notif in other_notifs[:50]:
+                icon   = NOTIF_ICON.get(notif["action_done"], "🔔")
+                is_new = notif["is_read"] == "unread"
+                bg     = "#fff3cd" if is_new else "#f8f9fa"
+                border = "2px solid #ffc107" if is_new else "1px solid #dee2e6"
+                badge  = " 🆕" if is_new else ""
+                weight = "bold" if is_new else "normal"
+                nid    = notif["notif_id"]
 
-        for notif in notifications[:50]:
-            icon    = NOTIF_ICON.get(notif["action_done"], "🔔")
-            is_new  = notif["is_read"] == "unread"
-            bg      = "#fff3cd" if is_new else "#f8f9fa"
-            border  = "2px solid #ffc107" if is_new else "1px solid #dee2e6"
-            badge   = " 🆕" if is_new else ""
-            weight  = "bold" if is_new else "normal"
+                st.markdown(f"""
+                <div style='background:{bg};border:{border};border-radius:8px;
+                            padding:8px 10px;margin-bottom:4px;'>
+                    <div style='font-size:14px;font-weight:{weight};color:#222;'>
+                        {icon} {notif["action_done"]}{badge}
+                    </div>
+                    <div style='font-size:13px;color:#333;margin-top:2px;'>
+                        📋 رقم الطلب: <b>{notif["order_id"]}</b>
+                    </div>
+                    <div style='font-size:12px;color:#555;'>
+                        📌 {notif["comp_type"]}
+                    </div>
+                    <div style='font-size:11px;color:#888;margin-top:3px;'>
+                        🕐 {notif["timestamp"]}
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
 
-            st.markdown(f"""
-            <div style='background:{bg};border:{border};border-radius:8px;
-                        padding:8px 10px;margin-bottom:6px;'>
-                <div style='font-size:14px;font-weight:{weight};color:#222;'>
-                    {icon} {notif["action_done"]}{badge}
+                btn_col1, btn_col2 = st.columns(2)
+                if is_new:
+                    if btn_col1.button("✅ مقروء", key=f"read_{nid}", use_container_width=True):
+                        mark_single_read(nid)
+                        st.rerun()
+                if btn_col2.button("🗑️ حذف", key=f"del_notif_{nid}", use_container_width=True):
+                    delete_single_notification(nid)
+                    st.rerun()
+
+        # ====== قسم إشعارات المخزن ======
+        st.markdown("---")
+        if unread_warehouse > 0:
+            st.markdown(
+                f"### 🏭 إشعارات المخزن &nbsp;"
+                f"<span style='background:#e74c3c;color:white;border-radius:50%;"
+                f"padding:2px 8px;font-size:14px;'>{unread_warehouse}</span>",
+                unsafe_allow_html=True
+            )
+        else:
+            st.markdown("### 🏭 إشعارات المخزن")
+
+        st.markdown("---")
+
+        if not warehouse_notifs:
+            st.info("لا توجد إشعارات مخزن")
+        else:
+            for notif in warehouse_notifs[:50]:
+                is_new = notif["is_read"] == "unread"
+                bg     = "#d4edda" if is_new else "#f8f9fa"
+                border = "2px solid #28a745" if is_new else "1px solid #dee2e6"
+                badge  = " 🆕" if is_new else ""
+                weight = "bold" if is_new else "normal"
+                nid    = notif["notif_id"]
+
+                st.markdown(f"""
+                <div style='background:{bg};border:{border};border-radius:8px;
+                            padding:8px 10px;margin-bottom:4px;'>
+                    <div style='font-size:14px;font-weight:{weight};color:#222;'>
+                        🏭 جاهز للمتابعة 2{badge}
+                    </div>
+                    <div style='font-size:13px;color:#333;margin-top:2px;'>
+                        📋 رقم الطلب: <b>{notif["order_id"]}</b>
+                    </div>
+                    <div style='font-size:12px;color:#555;'>
+                        📌 {notif["comp_type"]}
+                    </div>
+                    <div style='font-size:11px;color:#888;margin-top:3px;'>
+                        🕐 {notif["timestamp"]}
+                    </div>
                 </div>
-                <div style='font-size:13px;color:#333;margin-top:2px;'>
-                    📋 رقم الطلب: <b>{notif["order_id"]}</b>
-                </div>
-                <div style='font-size:12px;color:#555;'>
-                    📌 {notif["comp_type"]}
-                </div>
-                <div style='font-size:11px;color:#888;margin-top:3px;'>
-                    🕐 {notif["timestamp"]}
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
+                """, unsafe_allow_html=True)
+
+                btn_col1, btn_col2 = st.columns(2)
+                if is_new:
+                    if btn_col1.button("✅ مقروء", key=f"wh_read_{nid}", use_container_width=True):
+                        mark_single_read(nid)
+                        st.rerun()
+                if btn_col2.button("🗑️ حذف", key=f"wh_del_{nid}", use_container_width=True):
+                    delete_single_notification(nid)
+                    st.rerun()
 
 render_notifications_sidebar()
 
@@ -541,7 +537,6 @@ def cached_aramex_status(awb):
     if not awb or str(awb).strip() == "":
         return ""
     result = get_aramex_status(awb)
-    # نحفظ في session_state عشان check_followup2 يقدر يقراه بدون API call جديد
     st.session_state[f"aramex_cache_{awb}"] = result
     return result
 
@@ -712,11 +707,9 @@ with st.form("add_complaint", clear_on_submit=True):
             else:
                 if action.strip():
                     if safe_append(responded_sheet, [comp_id, comp_type, notes, action, date_now, "", outbound_awb, inbound_awb]):
-                        add_notification(comp_id, comp_type, "إضافة شكوى جديدة")
                         st.success("✅ تم تسجيل الشكوى في المردودة")
                 else:
                     if safe_append(complaints_sheet, [comp_id, comp_type, notes, "", date_now, "", outbound_awb, inbound_awb]):
-                        add_notification(comp_id, comp_type, "إضافة شكوى جديدة")
                         st.success("✅ تم تسجيل الشكوى في النشطة")
         else:
             st.error("⚠️ لازم تدخل رقم الشكوى وتختار نوع صحيح")
