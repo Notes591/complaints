@@ -147,26 +147,6 @@ def get_notifications():
     except Exception:
         return []
 
-def mark_all_read():
-    try:
-        all_rows = notifications_sheet.get_all_values()
-        for i, row in enumerate(all_rows):
-            if len(row) >= 6 and row[5] == "unread":
-                safe_update(notifications_sheet, f"F{i+1}", [["read"]])
-    except Exception:
-        pass
-
-def clear_all_notifications():
-    try:
-        all_rows = notifications_sheet.get_all_values()
-        for i in range(len(all_rows), 0, -1):
-            row = all_rows[i-1]
-            if len(row) > 0 and row[0].startswith("SNAP"):
-                continue
-            safe_delete(notifications_sheet, i)
-    except Exception:
-        pass
-
 def mark_single_read(notif_id):
     try:
         all_rows = notifications_sheet.get_all_values()
@@ -193,7 +173,7 @@ def delete_single_notification(notif_id):
 
 def set_followup2_snapshot(data):
     try:
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        timestamp  = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         serialized = "|".join([f"{k}:{v['status']}" for k, v in data.items()])
         rows = snapshots_sheet.get_all_values()
         for i, row in enumerate(rows, start=1):
@@ -209,7 +189,7 @@ def get_followup2_snapshot():
         rows = snapshots_sheet.get_all_values()
         for row in rows:
             if len(row) > 1 and row[0] == "followup2":
-                val = row[1]
+                val    = row[1]
                 result = {}
                 if val:
                     for p in val.split("|"):
@@ -223,7 +203,7 @@ def get_followup2_snapshot():
 
 def check_followup2_notifications():
     try:
-        snapshot = get_followup2_snapshot()
+        snapshot       = get_followup2_snapshot()
         responded_rows = responded_sheet.get_all_values()
         if len(responded_rows) <= 1:
             return
@@ -241,7 +221,7 @@ def check_followup2_notifications():
         for row in responded_rows[1:]:
             while len(row) < 8:
                 row.append("")
-            cid          = clean_id(row[0])
+            cid = clean_id(row[0])
             if not cid:
                 continue
             comp_type    = row[1]
@@ -307,7 +287,9 @@ def render_notifications_sidebar():
 
     with st.sidebar:
 
+        # ==========================================
         # ====== قسم الإشعارات العامة ======
+        # ==========================================
         st.markdown("---")
         if unread_other > 0:
             st.markdown(
@@ -319,12 +301,16 @@ def render_notifications_sidebar():
         else:
             st.markdown("### 🔔 الإشعارات")
 
+        # أزرار خاصة بقسم الإشعارات العامة فقط
         col_a, col_b = st.columns(2)
-        if col_a.button("✅ تعليم الكل مقروء", key="mark_all_read_btn", use_container_width=True):
-            mark_all_read()
+        if col_a.button("✅ تعليم الكل مقروء", key="mark_all_other_btn", use_container_width=True):
+            for n in other_notifs:
+                if n["is_read"] == "unread":
+                    mark_single_read(n["notif_id"])
             st.rerun()
-        if col_b.button("🗑️ مسح الكل", key="clear_all_btn", use_container_width=True):
-            clear_all_notifications()
+        if col_b.button("🗑️ مسح الكل", key="clear_all_other_btn", use_container_width=True):
+            for n in other_notifs:
+                delete_single_notification(n["notif_id"])
             st.rerun()
 
         st.markdown("---")
@@ -368,7 +354,9 @@ def render_notifications_sidebar():
                     delete_single_notification(nid)
                     st.rerun()
 
+        # ==========================================
         # ====== قسم إشعارات المخزن ======
+        # ==========================================
         st.markdown("---")
         if unread_warehouse > 0:
             st.markdown(
@@ -379,6 +367,18 @@ def render_notifications_sidebar():
             )
         else:
             st.markdown("### 🏭 إشعارات المخزن")
+
+        # أزرار خاصة بقسم المخزن فقط
+        col_c, col_d = st.columns(2)
+        if col_c.button("✅ تعليم الكل مقروء", key="mark_all_wh_btn", use_container_width=True):
+            for n in warehouse_notifs:
+                if n["is_read"] == "unread":
+                    mark_single_read(n["notif_id"])
+            st.rerun()
+        if col_d.button("🗑️ مسح الكل", key="clear_all_wh_btn", use_container_width=True):
+            for n in warehouse_notifs:
+                delete_single_notification(n["notif_id"])
+            st.rerun()
 
         st.markdown("---")
 
