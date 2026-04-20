@@ -54,13 +54,17 @@ snapshots_sheet        = sheets_dict["Snapshots"]
 # ====== إعدادات الصفحة ======
 st.set_page_config(page_title="📢 نظام الشكاوى", page_icon="⚠️", layout="wide")
 
-# ====== أنواع شكاوى مندوب الرياض ======
-RIYADH_DELEGATE_TYPES = {
+# ====== أنواع شكاوى مندوب الرياض (بداية الاسم عشان يشتغل مع أي نص إضافي) ======
+RIYADH_DELEGATE_PREFIXES = (
     "لمتابعه ارجاع الرياض",
     "لمتابعه صيانه الرياض",
     "لمتابعه نواقص الرياض",
     "لمتابعه استبدال الرياض",
-}
+)
+
+def is_riyadh_type(comp_type):
+    t = str(comp_type).strip()
+    return any(t.startswith(prefix) for prefix in RIYADH_DELEGATE_PREFIXES)
 
 # ======================================================
 
@@ -342,7 +346,7 @@ def check_riyadh_followup1_notifications():
             comp_type    = row[1]
 
             # ====== فقط الأنواع المخصوصة بمندوب الرياض ======
-            if comp_type not in RIYADH_DELEGATE_TYPES:
+            if not is_riyadh_type(comp_type):
                 continue
 
             outbound_awb = str(row[6]).strip()
