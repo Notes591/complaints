@@ -54,6 +54,14 @@ snapshots_sheet        = sheets_dict["Snapshots"]
 # ====== إعدادات الصفحة ======
 st.set_page_config(page_title="📢 نظام الشكاوى", page_icon="⚠️", layout="wide")
 
+# ====== أنواع شكاوى مندوب الرياض ======
+RIYADH_DELEGATE_TYPES = {
+    "لمتابعه ارجاع الرياض",
+    "لمتابعه صيانه الرياض",
+    "لمتابعه نواقص الرياض",
+    "لمتابعه استبدال الرياض",
+}
+
 # ======================================================
 
 def safe_append(sheet, row_data, retries=5, delay=1):
@@ -273,17 +281,129 @@ def check_followup2_notifications():
         st.error(f"خطأ في check_followup2: {e}")
 
 # ======================================================
+# ====== مراقبة "جاهز للمتابعة 1 - مندوب الرياض" ======
+# ======================================================
+
+def set_riyadh_followup1_snapshot(data):
+    try:
+        timestamp  = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        serialized = "|".join([f"{k}:{v['status']}" for k, v in data.items()])
+        rows = snapshots_sheet.get_all_values()
+        for i, row in enumerate(rows, start=1):
+            if len(row) > 0 and row[0] == "riyadh_followup1":
+                snapshots_sheet.update(f"A{i}:C{i}", [["riyadh_followup1", serialized, timestamp]])
+                return
+        snapshots_sheet.append_row(["riyadh_followup1", serialized, timestamp])
+    except Exception:
+        pass
+
+def get_riyadh_followup1_snapshot():
+    try:
+        rows = snapshots_sheet.get_all_values()
+        for row in rows:
+            if len(row) > 1 and row[0] == "riyadh_followup1":
+                val    = row[1]
+                result = {}
+                if val:
+                    for p in val.split("|"):
+                        if ":" in p:
+                            k, v = p.split(":", 1)
+                            result[clean_id(k)] = v
+                return result
+        return None
+    except Exception:
+        return None
+
+def check_riyadh_followup1_notifications():
+    try:
+        snapshot       = get_riyadh_followup1_snapshot()
+        responded_rows = responded_sheet.get_all_values()
+        if len(responded_rows) <= 1:
+            return
+        try:
+            rw_ids = {
+                clean_id(v)
+                for v in return_warehouse_sheet.col_values(1)[1:]
+                if clean_id(v)
+            }
+        except Exception:
+            rw_ids = set()
+
+        current_map = {}
+
+        for row in responded_rows[1:]:
+            while len(row) < 8:
+                row.append("")
+            cid = clean_id(row[0])
+            if not cid:
+                continue
+            comp_type    = row[1]
+
+            # ====== فقط الأنواع المخصوصة بمندوب الرياض ======
+            if comp_type not in RIYADH_DELEGATE_TYPES:
+                continue
+
+            outbound_awb = str(row[6]).strip()
+            inbound_awb  = str(row[7]).strip()
+
+            in_rw = cid in rw_ids
+
+            # delivered من أرامكس؟
+            delivered = False
+            for awb in [outbound_awb, inbound_awb]:
+                if not awb:
+                    continue
+                cache_key = f"aramex_cache_{awb}"
+                if cache_key not in st.session_state:
+                    status = cached_aramex_status(awb)
+                else:
+                    status = st.session_state[cache_key]
+                if status:
+                    s = status.lower()
+                    if "delivered" in s or "تم التسليم" in s:
+                        delivered = True
+                        break
+
+            # ====== الشرط: موجود في ReturnWarehouse ومش delivered أرامكس ======
+            if in_rw and not delivered:
+                new_status = "riyadh_followup_1"
+            else:
+                new_status = "other"
+
+            current_map[cid] = {
+                "status": new_status,
+                "type":   comp_type
+            }
+
+        if snapshot is None:
+            set_riyadh_followup1_snapshot(current_map)
+            return
+
+        for cid, data in current_map.items():
+            old_status = snapshot.get(cid, "other")
+            new_status = data["status"]
+            if old_status != "riyadh_followup_1" and new_status == "riyadh_followup_1":
+                add_notification(cid, data["type"], "جاهز للمتابعة 1 - مندوب الرياض")
+
+        set_riyadh_followup1_snapshot(current_map)
+
+    except Exception as e:
+        st.error(f"خطأ في check_riyadh_followup1: {e}")
+
+# ======================================================
 # ====== عرض الإشعارات في الشريط الجانبي ======
 # ======================================================
 def render_notifications_sidebar():
     notifications = get_notifications()
 
-    # تقسيم الإشعارات: مخزن vs باقي
+    # تقسيم الإشعارات: مخزن vs مندوب الرياض vs باقي
     warehouse_notifs = [n for n in notifications if n["action_done"] == "جاهز للمتابعة 2"]
-    other_notifs     = [n for n in notifications if n["action_done"] != "جاهز للمتابعة 2"]
+    riyadh_notifs    = [n for n in notifications if n["action_done"] == "جاهز للمتابعة 1 - مندوب الرياض"]
+    other_notifs     = [n for n in notifications if n["action_done"] not in ("جاهز للمتابعة 2", "جاهز للمتابعة 1 - مندوب الرياض")]
 
     unread_other     = sum(1 for n in other_notifs     if n["is_read"] == "unread")
     unread_warehouse = sum(1 for n in warehouse_notifs if n["is_read"] == "unread")
+    unread_riyadh    = sum(1 for n in riyadh_notifs    if n["is_read"] == "unread")
 
     with st.sidebar:
 
@@ -301,7 +421,6 @@ def render_notifications_sidebar():
         else:
             st.markdown("### 🔔 الإشعارات")
 
-        # أزرار خاصة بقسم الإشعارات العامة فقط
         col_a, col_b = st.columns(2)
         if col_a.button("✅ تعليم الكل مقروء", key="mark_all_other_btn", use_container_width=True):
             for n in other_notifs:
@@ -368,7 +487,6 @@ def render_notifications_sidebar():
         else:
             st.markdown("### 🏭 إشعارات المخزن")
 
-        # أزرار خاصة بقسم المخزن فقط
         col_c, col_d = st.columns(2)
         if col_c.button("✅ تعليم الكل مقروء", key="mark_all_wh_btn", use_container_width=True):
             for n in warehouse_notifs:
@@ -419,6 +537,72 @@ def render_notifications_sidebar():
                 if btn_col2.button("🗑️ حذف", key=f"wh_del_{nid}", use_container_width=True):
                     delete_single_notification(nid)
                     st.rerun()
+
+        # ==========================================
+        # ====== قسم إشعارات مندوب الرياض ======
+        # ==========================================
+        st.markdown("---")
+        if unread_riyadh > 0:
+            st.markdown(
+                f"### 🚴 إشعارات مندوب الرياض &nbsp;"
+                f"<span style='background:#e74c3c;color:white;border-radius:50%;"
+                f"padding:2px 8px;font-size:14px;'>{unread_riyadh}</span>",
+                unsafe_allow_html=True
+            )
+        else:
+            st.markdown("### 🚴 إشعارات مندوب الرياض")
+
+        col_e, col_f = st.columns(2)
+        if col_e.button("✅ تعليم الكل مقروء", key="mark_all_riyadh_btn", use_container_width=True):
+            for n in riyadh_notifs:
+                if n["is_read"] == "unread":
+                    mark_single_read(n["notif_id"])
+            st.rerun()
+        if col_f.button("🗑️ مسح الكل", key="clear_all_riyadh_btn", use_container_width=True):
+            for n in riyadh_notifs:
+                delete_single_notification(n["notif_id"])
+            st.rerun()
+
+        st.markdown("---")
+
+        if not riyadh_notifs:
+            st.info("لا توجد إشعارات مندوب الرياض")
+        else:
+            for notif in riyadh_notifs[:50]:
+                is_new = notif["is_read"] == "unread"
+                bg     = "#cce5ff" if is_new else "#f8f9fa"
+                border = "2px solid #004085" if is_new else "1px solid #dee2e6"
+                badge  = " 🆕" if is_new else ""
+                weight = "bold" if is_new else "normal"
+                nid    = notif["notif_id"]
+
+                st.markdown(f"""
+                <div style='background:{bg};border:{border};border-radius:8px;
+                            padding:8px 10px;margin-bottom:4px;'>
+                    <div style='font-size:14px;font-weight:{weight};color:#222;'>
+                        🚴 جاهز للمتابعة 1 - مندوب الرياض{badge}
+                    </div>
+                    <div style='font-size:13px;color:#333;margin-top:2px;'>
+                        📋 رقم الطلب: <b>{notif["order_id"]}</b>
+                    </div>
+                    <div style='font-size:12px;color:#555;'>
+                        📌 {notif["comp_type"]}
+                    </div>
+                    <div style='font-size:11px;color:#888;margin-top:3px;'>
+                        🕐 {notif["timestamp"]}
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+                btn_col1, btn_col2 = st.columns(2)
+                if is_new:
+                    if btn_col1.button("✅ مقروء", key=f"riyadh_read_{nid}", use_container_width=True):
+                        mark_single_read(nid)
+                        st.rerun()
+                if btn_col2.button("🗑️ حذف", key=f"riyadh_del_{nid}", use_container_width=True):
+                    delete_single_notification(nid)
+                    st.rerun()
+
 
 render_notifications_sidebar()
 
@@ -853,9 +1037,10 @@ if len(aramex_archived) > 1:
 else:
     st.info("لا توجد شكاوى أرامكس مؤرشفة.")
 
-# ====== تشغيل مراقبة followup_2 في آخر الصفحة بعد بناء الـ cache ======
+# ====== تشغيل المراقبة في آخر الصفحة بعد بناء الـ cache ======
 if "followup_checked" not in st.session_state:
     check_followup2_notifications()
+    check_riyadh_followup1_notifications()
     st.session_state["followup_checked"] = True
 
 st.caption("الإشعارات تظهر في الشريط الجانبي عند فتح الموقع.")
