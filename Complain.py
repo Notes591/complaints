@@ -301,14 +301,16 @@ def get_riyadh_followup1_snapshot():
     try:
         rows = snapshots_sheet.get_all_values()
         for row in rows:
-            if len(row) > 1 and row[0] == "riyadh_followup1":
-                val    = row[1]
+            if len(row) > 0 and row[0] == "riyadh_followup1":
+                # لو العمود B فاضي = snapshot غير مكتمل = نعامله كـ None
+                val = row[1] if len(row) > 1 else ""
+                if not val.strip():
+                    return None
                 result = {}
-                if val:
-                    for p in val.split("|"):
-                        if ":" in p:
-                            k, v = p.split(":", 1)
-                            result[clean_id(k)] = v
+                for p in val.split("|"):
+                    if ":" in p:
+                        k, v = p.split(":", 1)
+                        result[clean_id(k)] = v
                 return result
         return None
     except Exception:
@@ -375,7 +377,12 @@ def check_riyadh_followup1_notifications():
                 "type":   comp_type
             }
 
+        # لو مفيش شكاوى بالأنواع دي في responded، مش هنحفظ snapshot فاضي
+        if not current_map:
+            return
+
         if snapshot is None:
+            # snapshot فاضي أو مش موجود - احفظ الحالة الحالية بدون إشعارات
             set_riyadh_followup1_snapshot(current_map)
             return
 
