@@ -9,8 +9,6 @@ import requests
 import xml.etree.ElementTree as ET
 import re
 
-# ====== بدون autorefresh - الإشعارات تتحدث عند فتح الموقع بس ======
-
 # ====== الاتصال بجوجل شيت ======
 scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
 creds_dict = st.secrets["gcp_service_account"]
@@ -54,7 +52,7 @@ snapshots_sheet        = sheets_dict["Snapshots"]
 # ====== إعدادات الصفحة ======
 st.set_page_config(page_title="📢 نظام الشكاوى", page_icon="⚠️", layout="wide")
 
-# ====== أنواع شكاوى مندوب الرياض (بداية الاسم عشان يشتغل مع أي نص إضافي) ======
+# ====== أنواع شكاوى مندوب الرياض ======
 RIYADH_DELEGATE_PREFIXES = (
     "لمتابعه ارجاع الرياض",
     "لمتابعه صيانه الرياض",
@@ -66,8 +64,7 @@ def is_riyadh_type(comp_type):
     t = str(comp_type).strip()
     return any(t.startswith(prefix) for prefix in RIYADH_DELEGATE_PREFIXES)
 
-# ======================================================
-
+# ====== دوال مساعدة للشيت ======
 def safe_append(sheet, row_data, retries=5, delay=1):
     for attempt in range(retries):
         try:
@@ -104,9 +101,7 @@ def safe_delete(sheet, row_index, retries=5, delay=1):
     st.error("❌ فشل delete_rows بعد عدة محاولات.")
     return False
 
-# ======================================================
 # ====== نظام الإشعارات ======
-# ======================================================
 NOTIF_ICON = {
     "إضافة شكوى جديدة":          "➕",
     "حفظ شكوى":                   "💾",
@@ -179,10 +174,119 @@ def delete_single_notification(notif_id):
     except Exception:
         pass
 
-# ======================================================
-# ====== مراقبة "جاهز للمتابعة 2" للإشعارات ======
-# ======================================================
+# ====== إعداد حسابَي Aramex ======
+ARAMEX_ACCOUNTS = [
+    {
+        "label":              "الحساب الأول",
+        "UserName":           "fitnessworld525@gmail.com",
+        "Password":           "Aa12345678@",
+        "Version":            "v1",
+        "AccountNumber":      "71958996",
+        "AccountPin":         "657448",
+        "AccountEntity":      "RUH",
+        "AccountCountryCode": "SA"
+    },
+    {
+        "label":              "الحساب الثاني",
+        "UserName":           "homeentryh5556@gmail.com",
+        "Password":           "Aa12345678@",
+        "Version":            "v1",
+        "AccountNumber":      "4004297",
+        "AccountPin":         "216216",
+        "AccountEntity":      "RUH",
+        "AccountCountryCode": "SA"
+    }
+]
 
+def remove_xml_namespaces(xml_str):
+    xml_str = re.sub(r'xmlns(:\w+)?="[^"]+"', '', xml_str)
+    xml_str = re.sub(r'(<\/?)(\w+:)', r'\1', xml_str)
+    return xml_str
+
+def extract_reference(tracking_result):
+    for ref_tag in ['Reference1', 'Reference2', 'Reference3', 'Reference4', 'Reference5']:
+        ref_elem = tracking_result.find(ref_tag)
+        if ref_elem is not None and ref_elem.text and ref_elem.text.strip():
+            return ref_elem.text.strip()
+    return ""
+
+def _fetch_aramex_status(awb_number, account):
+    """محاولة جلب الحالة من حساب أرامكس واحد. يرجع النص أو None لو مفيش بيانات."""
+    try:
+        client_info = {k: v for k, v in account.items() if k != "label"}
+        payload = {
+            "ClientInfo": client_info,
+            "Shipments":  [awb_number],
+            "Transaction": {"Reference1": "", "Reference2": "", "Reference3": "", "Reference4": "", "Reference5": ""},
+            "LabelInfo":  None
+        }
+        url = "https://ws.aramex.net/ShippingAPI.V2/Tracking/Service_1_0.svc/json/TrackShipments"
+        response = requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=10)
+
+        if response.status_code != 200:
+            return None
+
+        xml_content = remove_xml_namespaces(response.content.decode('utf-8'))
+        root = ET.fromstring(xml_content)
+
+        tracking_results = root.find('TrackingResults')
+        if tracking_results is None:
+            return None
+
+        keyvalue = tracking_results.find('KeyValueOfstringArrayOfTrackingResultmFAkxlpY')
+        if keyvalue is None:
+            return None
+
+        tracking_array = keyvalue.find('Value')
+        if tracking_array is None:
+            return None
+
+        tracks = tracking_array.findall('TrackingResult')
+        if not tracks:
+            return None  # مفيش بيانات → جرّب الحساب التاني
+
+        last_track = sorted(
+            tracks,
+            key=lambda tr: tr.find('UpdateDateTime').text if tr.find('UpdateDateTime') is not None else '',
+            reverse=True
+        )[0]
+
+        desc = last_track.find('UpdateDescription').text if last_track.find('UpdateDescription') is not None else "—"
+        if not desc or desc == "—":
+            return None
+
+        date = last_track.find('UpdateDateTime').text if last_track.find('UpdateDateTime') is not None else "—"
+        loc  = last_track.find('UpdateLocation').text  if last_track.find('UpdateLocation')  is not None else "—"
+        ref  = extract_reference(last_track)
+
+        info = f"{desc} بتاريخ {date} في {loc}"
+        if ref:
+            info += f" | الرقم المرجعي: {ref}"
+        return info
+
+    except Exception:
+        return None
+
+
+def get_aramex_status(awb_number):
+    """يجرب الحسابين بالترتيب. الأول يرجع نتيجة يستخدمها، لو لا يجرب الثاني."""
+    for account in ARAMEX_ACCOUNTS:
+        result = _fetch_aramex_status(awb_number, account)
+        if result:
+            return result
+    return "❌ لا توجد حالة متاحة من أي حساب"
+
+
+@st.cache_data(ttl=300)
+def cached_aramex_status(awb):
+    if not awb or str(awb).strip() == "":
+        return ""
+    result = get_aramex_status(awb)
+    st.session_state[f"aramex_cache_{awb}"] = result
+    return result
+
+
+# ====== مراقبة "جاهز للمتابعة 2" ======
 def set_followup2_snapshot(data):
     try:
         timestamp  = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -201,10 +305,9 @@ def get_followup2_snapshot():
         rows = snapshots_sheet.get_all_values()
         for row in rows:
             if len(row) > 1 and row[0] == "followup2":
-                val    = row[1]
                 result = {}
-                if val:
-                    for p in val.split("|"):
+                if row[1]:
+                    for p in row[1].split("|"):
                         if ":" in p:
                             k, v = p.split(":", 1)
                             result[clean_id(k)] = v
@@ -220,20 +323,15 @@ def check_followup2_notifications():
         if len(responded_rows) <= 1:
             return
         try:
-            rw_ids = {
-                clean_id(v)
-                for v in return_warehouse_sheet.col_values(1)[1:]
-                if clean_id(v)
-            }
+            rw_ids = {clean_id(v) for v in return_warehouse_sheet.col_values(1)[1:] if clean_id(v)}
         except Exception:
             rw_ids = set()
 
         current_map = {}
-
         for row in responded_rows[1:]:
             while len(row) < 8:
                 row.append("")
-            cid = clean_id(row[0])
+            cid          = clean_id(row[0])
             if not cid:
                 continue
             comp_type    = row[1]
@@ -245,10 +343,7 @@ def check_followup2_notifications():
                 if not awb:
                     continue
                 cache_key = f"aramex_cache_{awb}"
-                if cache_key not in st.session_state:
-                    status = cached_aramex_status(awb)
-                else:
-                    status = st.session_state[cache_key]
+                status = st.session_state.get(cache_key) or cached_aramex_status(awb)
                 if status:
                     s = status.lower()
                     if "delivered" in s or "تم التسليم" in s:
@@ -256,7 +351,6 @@ def check_followup2_notifications():
                         break
 
             in_rw = cid in rw_ids
-
             if delivered and in_rw:
                 new_status = "followup_2"
             elif delivered and not in_rw:
@@ -264,30 +358,22 @@ def check_followup2_notifications():
             else:
                 new_status = "other"
 
-            current_map[cid] = {
-                "status": new_status,
-                "type":   comp_type
-            }
+            current_map[cid] = {"status": new_status, "type": comp_type}
 
         if snapshot is None:
             set_followup2_snapshot(current_map)
             return
 
         for cid, data in current_map.items():
-            old_status = snapshot.get(cid, "other")
-            new_status = data["status"]
-            if old_status != "followup_2" and new_status == "followup_2":
+            if snapshot.get(cid, "other") != "followup_2" and data["status"] == "followup_2":
                 add_notification(cid, data["type"], "جاهز للمتابعة 2")
 
         set_followup2_snapshot(current_map)
-
     except Exception as e:
         st.error(f"خطأ في check_followup2: {e}")
 
-# ======================================================
-# ====== مراقبة "جاهز للمتابعة 1 - مندوب الرياض" ======
-# ======================================================
 
+# ====== مراقبة "جاهز للمتابعة 1 - مندوب الرياض" ======
 def set_riyadh_followup1_snapshot(data):
     try:
         timestamp  = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -306,7 +392,6 @@ def get_riyadh_followup1_snapshot():
         rows = snapshots_sheet.get_all_values()
         for row in rows:
             if len(row) > 0 and row[0] == "riyadh_followup1":
-                # لو العمود B فاضي = snapshot غير مكتمل = نعامله كـ None
                 val = row[1] if len(row) > 1 else ""
                 if not val.strip():
                     return None
@@ -327,87 +412,59 @@ def check_riyadh_followup1_notifications():
         if len(responded_rows) <= 1:
             return
         try:
-            rw_ids = {
-                clean_id(v)
-                for v in return_warehouse_sheet.col_values(1)[1:]
-                if clean_id(v)
-            }
+            rw_ids = {clean_id(v) for v in return_warehouse_sheet.col_values(1)[1:] if clean_id(v)}
         except Exception:
             rw_ids = set()
 
         current_map = {}
-
         for row in responded_rows[1:]:
             while len(row) < 8:
                 row.append("")
             cid = clean_id(row[0])
             if not cid:
                 continue
-            comp_type    = row[1]
-
-            # ====== فقط الأنواع المخصوصة بمندوب الرياض ======
+            comp_type = row[1]
             if not is_riyadh_type(comp_type):
                 continue
 
             outbound_awb = str(row[6]).strip()
             inbound_awb  = str(row[7]).strip()
+            in_rw        = cid in rw_ids
+            delivered    = False
 
-            in_rw = cid in rw_ids
-
-            # delivered من أرامكس؟
-            delivered = False
             for awb in [outbound_awb, inbound_awb]:
                 if not awb:
                     continue
                 cache_key = f"aramex_cache_{awb}"
-                if cache_key not in st.session_state:
-                    status = cached_aramex_status(awb)
-                else:
-                    status = st.session_state[cache_key]
+                status = st.session_state.get(cache_key) or cached_aramex_status(awb)
                 if status:
                     s = status.lower()
                     if "delivered" in s or "تم التسليم" in s:
                         delivered = True
                         break
 
-            # ====== الشرط: موجود في ReturnWarehouse ومش delivered أرامكس ======
-            if in_rw and not delivered:
-                new_status = "riyadh_followup_1"
-            else:
-                new_status = "other"
+            new_status = "riyadh_followup_1" if (in_rw and not delivered) else "other"
+            current_map[cid] = {"status": new_status, "type": comp_type}
 
-            current_map[cid] = {
-                "status": new_status,
-                "type":   comp_type
-            }
-
-        # لو مفيش شكاوى بالأنواع دي في responded، مش هنحفظ snapshot فاضي
         if not current_map:
             return
 
         if snapshot is None:
-            # snapshot فاضي أو مش موجود - احفظ الحالة الحالية بدون إشعارات
             set_riyadh_followup1_snapshot(current_map)
             return
 
         for cid, data in current_map.items():
-            old_status = snapshot.get(cid, "other")
-            new_status = data["status"]
-            if old_status != "riyadh_followup_1" and new_status == "riyadh_followup_1":
+            if snapshot.get(cid, "other") != "riyadh_followup_1" and data["status"] == "riyadh_followup_1":
                 add_notification(cid, data["type"], "جاهز للمتابعة 1 - مندوب الرياض")
 
         set_riyadh_followup1_snapshot(current_map)
-
     except Exception as e:
         st.error(f"خطأ في check_riyadh_followup1: {e}")
 
-# ======================================================
-# ====== عرض الإشعارات في الشريط الجانبي ======
-# ======================================================
-def render_notifications_sidebar():
-    notifications = get_notifications()
 
-    # تقسيم الإشعارات: مخزن vs مندوب الرياض vs باقي
+# ====== عرض الإشعارات في الشريط الجانبي ======
+def render_notifications_sidebar():
+    notifications    = get_notifications()
     warehouse_notifs = [n for n in notifications if n["action_done"] == "جاهز للمتابعة 2"]
     riyadh_notifs    = [n for n in notifications if n["action_done"] == "جاهز للمتابعة 1 - مندوب الرياض"]
     other_notifs     = [n for n in notifications if n["action_done"] not in ("جاهز للمتابعة 2", "جاهز للمتابعة 1 - مندوب الرياض")]
@@ -418,9 +475,7 @@ def render_notifications_sidebar():
 
     with st.sidebar:
 
-        # ==========================================
-        # ====== قسم الإشعارات العامة ======
-        # ==========================================
+        # ====== الإشعارات العامة ======
         st.markdown("---")
         if unread_other > 0:
             st.markdown(
@@ -444,7 +499,6 @@ def render_notifications_sidebar():
             st.rerun()
 
         st.markdown("---")
-
         if not other_notifs:
             st.info("لا توجد إشعارات")
         else:
@@ -456,7 +510,6 @@ def render_notifications_sidebar():
                 badge  = " 🆕" if is_new else ""
                 weight = "bold" if is_new else "normal"
                 nid    = notif["notif_id"]
-
                 st.markdown(f"""
                 <div style='background:{bg};border:{border};border-radius:8px;
                             padding:8px 10px;margin-bottom:4px;'>
@@ -466,15 +519,10 @@ def render_notifications_sidebar():
                     <div style='font-size:13px;color:#333;margin-top:2px;'>
                         📋 رقم الطلب: <b>{notif["order_id"]}</b>
                     </div>
-                    <div style='font-size:12px;color:#555;'>
-                        📌 {notif["comp_type"]}
-                    </div>
-                    <div style='font-size:11px;color:#888;margin-top:3px;'>
-                        🕐 {notif["timestamp"]}
-                    </div>
+                    <div style='font-size:12px;color:#555;'>📌 {notif["comp_type"]}</div>
+                    <div style='font-size:11px;color:#888;margin-top:3px;'>🕐 {notif["timestamp"]}</div>
                 </div>
                 """, unsafe_allow_html=True)
-
                 btn_col1, btn_col2 = st.columns(2)
                 if is_new:
                     if btn_col1.button("✅ مقروء", key=f"read_{nid}", use_container_width=True):
@@ -484,9 +532,7 @@ def render_notifications_sidebar():
                     delete_single_notification(nid)
                     st.rerun()
 
-        # ==========================================
-        # ====== قسم إشعارات المخزن ======
-        # ==========================================
+        # ====== إشعارات المخزن ======
         st.markdown("---")
         if unread_warehouse > 0:
             st.markdown(
@@ -510,7 +556,6 @@ def render_notifications_sidebar():
             st.rerun()
 
         st.markdown("---")
-
         if not warehouse_notifs:
             st.info("لا توجد إشعارات مخزن")
         else:
@@ -521,7 +566,6 @@ def render_notifications_sidebar():
                 badge  = " 🆕" if is_new else ""
                 weight = "bold" if is_new else "normal"
                 nid    = notif["notif_id"]
-
                 st.markdown(f"""
                 <div style='background:{bg};border:{border};border-radius:8px;
                             padding:8px 10px;margin-bottom:4px;'>
@@ -531,15 +575,10 @@ def render_notifications_sidebar():
                     <div style='font-size:13px;color:#333;margin-top:2px;'>
                         📋 رقم الطلب: <b>{notif["order_id"]}</b>
                     </div>
-                    <div style='font-size:12px;color:#555;'>
-                        📌 {notif["comp_type"]}
-                    </div>
-                    <div style='font-size:11px;color:#888;margin-top:3px;'>
-                        🕐 {notif["timestamp"]}
-                    </div>
+                    <div style='font-size:12px;color:#555;'>📌 {notif["comp_type"]}</div>
+                    <div style='font-size:11px;color:#888;margin-top:3px;'>🕐 {notif["timestamp"]}</div>
                 </div>
                 """, unsafe_allow_html=True)
-
                 btn_col1, btn_col2 = st.columns(2)
                 if is_new:
                     if btn_col1.button("✅ مقروء", key=f"wh_read_{nid}", use_container_width=True):
@@ -549,9 +588,7 @@ def render_notifications_sidebar():
                     delete_single_notification(nid)
                     st.rerun()
 
-        # ==========================================
-        # ====== قسم إشعارات مندوب الرياض ======
-        # ==========================================
+        # ====== إشعارات مندوب الرياض ======
         st.markdown("---")
         if unread_riyadh > 0:
             st.markdown(
@@ -575,7 +612,6 @@ def render_notifications_sidebar():
             st.rerun()
 
         st.markdown("---")
-
         if not riyadh_notifs:
             st.info("لا توجد إشعارات مندوب الرياض")
         else:
@@ -586,7 +622,6 @@ def render_notifications_sidebar():
                 badge  = " 🆕" if is_new else ""
                 weight = "bold" if is_new else "normal"
                 nid    = notif["notif_id"]
-
                 st.markdown(f"""
                 <div style='background:{bg};border:{border};border-radius:8px;
                             padding:8px 10px;margin-bottom:4px;'>
@@ -596,15 +631,10 @@ def render_notifications_sidebar():
                     <div style='font-size:13px;color:#333;margin-top:2px;'>
                         📋 رقم الطلب: <b>{notif["order_id"]}</b>
                     </div>
-                    <div style='font-size:12px;color:#555;'>
-                        📌 {notif["comp_type"]}
-                    </div>
-                    <div style='font-size:11px;color:#888;margin-top:3px;'>
-                        🕐 {notif["timestamp"]}
-                    </div>
+                    <div style='font-size:12px;color:#555;'>📌 {notif["comp_type"]}</div>
+                    <div style='font-size:11px;color:#888;margin-top:3px;'>🕐 {notif["timestamp"]}</div>
                 </div>
                 """, unsafe_allow_html=True)
-
                 btn_col1, btn_col2 = st.columns(2)
                 if is_new:
                     if btn_col1.button("✅ مقروء", key=f"riyadh_read_{nid}", use_container_width=True):
@@ -617,9 +647,7 @@ def render_notifications_sidebar():
 
 render_notifications_sidebar()
 
-# ======================================================
 # ====== تحميل البيانات ======
-# ======================================================
 try:
     types_list = [row[0] for row in types_sheet.get_all_values()[1:] if row and row[0]]
 except Exception:
@@ -662,83 +690,7 @@ def get_order_status(order_id):
                 return "الطلب الاساسي ⏳ تحت المتابعة"
     return "⏳ تحت المتابعة"
 
-# ======================================================
-# ====== إعداد Aramex ======
-# ======================================================
-client_info = {
-    "UserName":           "fitnessworld525@gmail.com",
-    "Password":           "Aa12345678@",
-    "Version":            "v1",
-    "AccountNumber":      "71958996",
-    "AccountPin":         "657448",
-    "AccountEntity":      "RUH",
-    "AccountCountryCode": "SA"
-}
-
-def remove_xml_namespaces(xml_str):
-    xml_str = re.sub(r'xmlns(:\w+)?="[^"]+"', '', xml_str)
-    xml_str = re.sub(r'(<\/?)(\w+:)', r'\1', xml_str)
-    return xml_str
-
-def extract_reference(tracking_result):
-    for ref_tag in ['Reference1','Reference2','Reference3','Reference4','Reference5']:
-        ref_elem = tracking_result.find(ref_tag)
-        if ref_elem is not None and ref_elem.text and ref_elem.text.strip():
-            return ref_elem.text.strip()
-    return ""
-
-def get_aramex_status(awb_number):
-    try:
-        payload = {
-            "ClientInfo": client_info,
-            "Shipments":  [awb_number],
-            "Transaction": {"Reference1":"","Reference2":"","Reference3":"","Reference4":"","Reference5":""},
-            "LabelInfo":  None
-        }
-        url = "https://ws.aramex.net/ShippingAPI.V2/Tracking/Service_1_0.svc/json/TrackShipments"
-        response = requests.post(url, json=payload, headers={"Content-Type":"application/json"}, timeout=10)
-        if response.status_code != 200:
-            return f"❌ فشل الاتصال - كود {response.status_code}"
-        xml_content = remove_xml_namespaces(response.content.decode('utf-8'))
-        root = ET.fromstring(xml_content)
-        tracking_results = root.find('TrackingResults')
-        if tracking_results is None or len(tracking_results) == 0:
-            return "❌ لا توجد حالة متاحة"
-        keyvalue = tracking_results.find('KeyValueOfstringArrayOfTrackingResultmFAkxlpY')
-        if keyvalue is not None:
-            tracking_array = keyvalue.find('Value')
-            if tracking_array is not None:
-                tracks = tracking_array.findall('TrackingResult')
-                if tracks:
-                    last_track = sorted(
-                        tracks,
-                        key=lambda tr: tr.find('UpdateDateTime').text if tr.find('UpdateDateTime') is not None else '',
-                        reverse=True
-                    )[0]
-                    desc = last_track.find('UpdateDescription').text if last_track.find('UpdateDescription') is not None else "—"
-                    date = last_track.find('UpdateDateTime').text if last_track.find('UpdateDateTime') is not None else "—"
-                    loc  = last_track.find('UpdateLocation').text if last_track.find('UpdateLocation') is not None else "—"
-                    ref  = extract_reference(last_track)
-                    info = f"{desc} بتاريخ {date} في {loc}"
-                    if ref:
-                        info += f" | الرقم المرجعي: {ref}"
-                    return info
-        return "❌ لا توجد حالة متاحة"
-    except Exception as e:
-        return f"خطأ في جلب الحالة: {e}"
-
-@st.cache_data(ttl=300)
-def cached_aramex_status(awb):
-    if not awb or str(awb).strip() == "":
-        return ""
-    result = get_aramex_status(awb)
-    st.session_state[f"aramex_cache_{awb}"] = result
-    return result
-
-
-# ======================================================
 # ====== دالة عرض الشكوى ======
-# ======================================================
 def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
     while len(row) < 8:
         row.append("")
@@ -822,12 +774,10 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
                             add_notification(comp_id, new_type, "رجوع للنشطة")
                             st.success("✅ انتقلت للنشطة")
 
-# ======================================================
 # ====== العنوان الرئيسي ======
-# ======================================================
 st.title("⚠️ نظام إدارة الشكاوى")
 
-# ====== البحث عن شكوى ======
+# ====== البحث ======
 st.header("🔍 البحث عن شكوى")
 search_id = st.text_input("أدخل رقم الشكوى للبحث")
 if search_id.strip():
@@ -879,9 +829,9 @@ with st.form("add_complaint", clear_on_submit=True):
                 archive = []
 
             date_now        = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            all_active_ids  = [clean_id(str(c.get("ID",""))) for c in complaints] + \
-                              [clean_id(str(r.get("ID",""))) for r in responded]
-            all_archive_ids = [clean_id(str(a.get("ID",""))) for a in archive]
+            all_active_ids  = [clean_id(str(c.get("ID", ""))) for c in complaints] + \
+                              [clean_id(str(r.get("ID", ""))) for r in responded]
+            all_archive_ids = [clean_id(str(a.get("ID", ""))) for a in archive]
             cid             = clean_id(comp_id)
 
             if cid in all_active_ids:
@@ -909,7 +859,7 @@ with st.form("add_complaint", clear_on_submit=True):
         else:
             st.error("⚠️ لازم تدخل رقم الشكوى وتختار نوع صحيح")
 
-# ====== عرض الشكاوى النشطة ======
+# ====== الشكاوى النشطة ======
 st.header("📋 الشكاوى النشطة:")
 active_notes = complaints_sheet.get_all_values()
 if len(active_notes) > 1:
@@ -918,7 +868,7 @@ if len(active_notes) > 1:
 else:
     st.info("لا توجد شكاوى نشطة حالياً.")
 
-# ====== عرض الإجراءات المردودة ======
+# ====== الإجراءات المردودة ======
 st.header("✅ الإجراءات المردودة حسب النوع:")
 responded_notes = responded_sheet.get_all_values()
 if len(responded_notes) > 1:
@@ -987,17 +937,17 @@ if len(aramex_pending) > 1:
     for i, row in enumerate(aramex_pending[1:], start=2):
         while len(row) < 4:
             row.append("")
-        order_id   = row[0]
-        status     = row[1]
-        date_added = row[2]
-        action     = row[3]
-        with st.expander(f"📦 طلب {order_id}"):
-            st.write(f"📌 الحالة الحالية: {status}")
-            st.write(f"✅ الإجراء الحالي: {action}")
-            st.caption(f"📅 تاريخ الإضافة: {date_added}")
-            with st.form(key=f"form_aramex_{order_id}_{i}"):
-                new_status = st.text_input("✏️ عدل الحالة", value=status)
-                new_action = st.text_area("✏️ عدل الإجراء", value=action)
+        order_id_r = row[0]
+        status_r   = row[1]
+        date_r     = row[2]
+        action_r   = row[3]
+        with st.expander(f"📦 طلب {order_id_r}"):
+            st.write(f"📌 الحالة الحالية: {status_r}")
+            st.write(f"✅ الإجراء الحالي: {action_r}")
+            st.caption(f"📅 تاريخ الإضافة: {date_r}")
+            with st.form(key=f"form_aramex_{order_id_r}_{i}"):
+                new_status = st.text_input("✏️ عدل الحالة", value=status_r)
+                new_action = st.text_area("✏️ عدل الإجراء", value=action_r)
                 col1, col2, col3 = st.columns(3)
                 s_save    = col1.form_submit_button("💾 حفظ")
                 s_delete  = col2.form_submit_button("🗑️ حذف")
@@ -1005,16 +955,16 @@ if len(aramex_pending) > 1:
                 if s_save:
                     if safe_update(aramex_sheet, f"B{i}", [[new_status]]) and \
                        safe_update(aramex_sheet, f"D{i}", [[new_action]]):
-                        add_notification(order_id, "معلق أرامكس", "تعديل معلق أرامكس")
+                        add_notification(order_id_r, "معلق أرامكس", "تعديل معلق أرامكس")
                         st.success("✅ تم تعديل الطلب")
                 if s_delete:
                     if safe_delete(aramex_sheet, i):
-                        add_notification(order_id, "معلق أرامكس", "حذف شكوى")
+                        add_notification(order_id_r, "معلق أرامكس", "حذف شكوى")
                         st.warning("🗑️ تم حذف الطلب")
                 if s_archive:
-                    if safe_append(aramex_archive, [order_id, new_status, date_added, new_action]):
+                    if safe_append(aramex_archive, [order_id_r, new_status, date_r, new_action]):
                         if safe_delete(aramex_sheet, i):
-                            add_notification(order_id, "معلق أرامكس", "أرشفة معلق أرامكس")
+                            add_notification(order_id_r, "معلق أرامكس", "أرشفة معلق أرامكس")
                             st.success("♻️ تم أرشفة الطلب")
 else:
     st.info("لا توجد شكاوى أرامكس معلقة.")
@@ -1027,28 +977,28 @@ if len(aramex_archived) > 1:
     for i, row in enumerate(aramex_archived[1:], start=2):
         while len(row) < 4:
             row.append("")
-        order_id   = row[0]
-        status     = row[1]
-        date_added = row[2]
-        action     = row[3]
-        with st.expander(f"📦 أرشيف طلب {order_id}"):
-            st.write(f"📌 الحالة عند الأرشفة: {status}")
-            st.write(f"✅ الإجراء: {action}")
-            st.caption(f"📅 تاريخ الإضافة: {date_added}")
+        order_id_r = row[0]
+        status_r   = row[1]
+        date_r     = row[2]
+        action_r   = row[3]
+        with st.expander(f"📦 أرشيف طلب {order_id_r}"):
+            st.write(f"📌 الحالة عند الأرشفة: {status_r}")
+            st.write(f"✅ الإجراء: {action_r}")
+            st.caption(f"📅 تاريخ الإضافة: {date_r}")
             col1, col2 = st.columns(2)
-            if col1.button(f"⬅️ إرجاع {order_id} إلى معلق ارامكس", key=f"ret_{order_id}_{i}"):
-                if safe_append(aramex_sheet, [order_id, status, date_added, action]):
+            if col1.button(f"⬅️ إرجاع {order_id_r} إلى معلق ارامكس", key=f"ret_{order_id_r}_{i}"):
+                if safe_append(aramex_sheet, [order_id_r, status_r, date_r, action_r]):
                     if safe_delete(aramex_archive, i):
-                        add_notification(order_id, "معلق أرامكس", "رجوع للنشطة")
-                        st.success(f"✅ تم إعادة {order_id} لمعلق ارامكس")
-            if col2.button(f"🗑️ حذف {order_id} من الأرشيف", key=f"del_{order_id}_{i}"):
+                        add_notification(order_id_r, "معلق أرامكس", "رجوع للنشطة")
+                        st.success(f"✅ تم إعادة {order_id_r} لمعلق ارامكس")
+            if col2.button(f"🗑️ حذف {order_id_r} من الأرشيف", key=f"del_{order_id_r}_{i}"):
                 if safe_delete(aramex_archive, i):
-                    add_notification(order_id, "معلق أرامكس", "حذف شكوى")
-                    st.warning(f"🗑️ تم حذف {order_id} من أرشيف أرامكس")
+                    add_notification(order_id_r, "معلق أرامكس", "حذف شكوى")
+                    st.warning(f"🗑️ تم حذف {order_id_r} من أرشيف أرامكس")
 else:
     st.info("لا توجد شكاوى أرامكس مؤرشفة.")
 
-# ====== تشغيل المراقبة في آخر الصفحة بعد بناء الـ cache ======
+# ====== تشغيل المراقبة في آخر الصفحة ======
 if "followup_checked" not in st.session_state:
     check_followup2_notifications()
     check_riyadh_followup1_notifications()
