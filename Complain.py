@@ -64,11 +64,29 @@ def is_riyadh_type(comp_type):
     t = str(comp_type).strip()
     return any(t.startswith(prefix) for prefix in RIYADH_DELEGATE_PREFIXES)
 
+# ====== كاش البيانات في session_state لتقليل API calls ======
+def _sheet_cache_key(sheet):
+    return f"_sheet_cache_{sheet.title}"
+
+def get_sheet_values(sheet, force_refresh=False):
+    """جلب بيانات الشيت مع كاش في session_state لتجنب API calls زيادة"""
+    key = _sheet_cache_key(sheet)
+    if force_refresh or key not in st.session_state:
+        st.session_state[key] = sheet.get_all_values()
+    return st.session_state[key]
+
+def invalidate_sheet_cache(sheet):
+    """حذف الكاش عشان يتجدد في المرة الجاية"""
+    key = _sheet_cache_key(sheet)
+    if key in st.session_state:
+        del st.session_state[key]
+
 # ====== دوال مساعدة للشيت ======
 def safe_append(sheet, row_data, retries=5, delay=1):
     for attempt in range(retries):
         try:
             sheet.append_row(row_data)
+            invalidate_sheet_cache(sheet)
             return True
         except gspread.exceptions.APIError:
             time.sleep(delay)
@@ -81,6 +99,7 @@ def safe_update(sheet, cell_range, values, retries=5, delay=1):
     for attempt in range(retries):
         try:
             sheet.update(cell_range, values)
+            invalidate_sheet_cache(sheet)
             return True
         except gspread.exceptions.APIError:
             time.sleep(delay)
@@ -89,10 +108,28 @@ def safe_update(sheet, cell_range, values, retries=5, delay=1):
     st.error("❌ فشل update بعد عدة محاولات.")
     return False
 
+def safe_batch_update(sheet, updates, retries=5, delay=1):
+    """
+    تحديث عدة خلايا في طلب واحد بدل عدة calls
+    updates: list of {"range": "B2", "values": [[val]]}
+    """
+    for attempt in range(retries):
+        try:
+            sheet.batch_update(updates)
+            invalidate_sheet_cache(sheet)
+            return True
+        except gspread.exceptions.APIError:
+            time.sleep(delay)
+        except Exception:
+            time.sleep(delay)
+    st.error("❌ فشل batch_update بعد عدة محاولات.")
+    return False
+
 def safe_delete(sheet, row_index, retries=5, delay=1):
     for attempt in range(retries):
         try:
             sheet.delete_rows(row_index)
+            invalidate_sheet_cache(sheet)
             return True
         except gspread.exceptions.APIError:
             time.sleep(delay)
@@ -123,13 +160,33 @@ def clean_id(val):
     return cleaned.strip()
 
 def add_notification(order_id, comp_type, action_done):
+    """
+    إضافة إشعار مع تجنب التكرار:
+    - لإشعارات followup: تُضاف فقط لو مافيش إشعار unread بنفس الـ order_id والـ action
+    - باقي الإشعارات: تُضاف دايماً
+    """
+    followup_actions = {"جاهز للمتابعة 2", "جاهز للمتابعة 1 - مندوب الرياض"}
+
+    if action_done in followup_actions:
+        # تحقق من عدم وجود إشعار مكرر
+        try:
+            existing = notifications_sheet.get_all_values()
+            for row in existing:
+                if len(row) >= 6:
+                    if (clean_id(row[1]) == clean_id(str(order_id))
+                            and row[3] == action_done
+                            and row[5] == "unread"):
+                        return  # إشعار مكرر موجود، لا تضيف
+        except Exception:
+            pass
+
     notif_id  = f"N{int(time.time()*1000)}"
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     safe_append(notifications_sheet, [notif_id, str(order_id), str(comp_type), str(action_done), timestamp, "unread"])
 
 def get_notifications():
     try:
-        all_rows = notifications_sheet.get_all_values()
+        all_rows = get_sheet_values(notifications_sheet)
         if not all_rows:
             return []
         data_rows = []
@@ -156,7 +213,7 @@ def get_notifications():
 
 def mark_single_read(notif_id):
     try:
-        all_rows = notifications_sheet.get_all_values()
+        all_rows = get_sheet_values(notifications_sheet)
         for i, row in enumerate(all_rows):
             if len(row) >= 1 and row[0] == notif_id:
                 safe_update(notifications_sheet, f"F{i+1}", [["read"]])
@@ -164,9 +221,42 @@ def mark_single_read(notif_id):
     except Exception:
         pass
 
+def mark_all_read_batch(notifs):
+    """تعليم عدة إشعارات كمقروءة في batch واحد"""
+    try:
+        all_rows = get_sheet_values(notifications_sheet)
+        notif_ids = {n["notif_id"] for n in notifs if n["is_read"] == "unread"}
+        updates = []
+        for i, row in enumerate(all_rows):
+            if len(row) >= 1 and row[0] in notif_ids:
+                updates.append({"range": f"F{i+1}", "values": [["read"]]})
+        if updates:
+            safe_batch_update(notifications_sheet, updates)
+    except Exception:
+        pass
+
+def delete_notifications_batch(notifs):
+    """
+    حذف عدة إشعارات بكفاءة: نجمع الـ row indices ونحذف من الأسفل للأعلى
+    لتجنب اختلال الأرقام بعد كل حذف
+    """
+    try:
+        all_rows = get_sheet_values(notifications_sheet)
+        notif_ids = {n["notif_id"] for n in notifs}
+        rows_to_delete = []
+        for i, row in enumerate(all_rows):
+            if len(row) >= 1 and row[0] in notif_ids:
+                rows_to_delete.append(i + 1)
+        # نحذف من الأسفل للأعلى لتجنب اختلال الأرقام
+        for row_idx in sorted(rows_to_delete, reverse=True):
+            notifications_sheet.delete_rows(row_idx)
+        invalidate_sheet_cache(notifications_sheet)
+    except Exception:
+        pass
+
 def delete_single_notification(notif_id):
     try:
-        all_rows = notifications_sheet.get_all_values()
+        all_rows = get_sheet_values(notifications_sheet)
         for i, row in enumerate(all_rows):
             if len(row) >= 1 and row[0] == notif_id:
                 safe_delete(notifications_sheet, i+1)
@@ -243,7 +333,7 @@ def _fetch_aramex_status(awb_number, account):
 
         tracks = tracking_array.findall('TrackingResult')
         if not tracks:
-            return None  # مفيش بيانات → جرّب الحساب التاني
+            return None
 
         last_track = sorted(
             tracks,
@@ -319,7 +409,7 @@ def get_followup2_snapshot():
 def check_followup2_notifications():
     try:
         snapshot       = get_followup2_snapshot()
-        responded_rows = responded_sheet.get_all_values()
+        responded_rows = get_sheet_values(responded_sheet)
         if len(responded_rows) <= 1:
             return
         try:
@@ -361,11 +451,14 @@ def check_followup2_notifications():
             current_map[cid] = {"status": new_status, "type": comp_type}
 
         if snapshot is None:
+            # أول مرة: نحفظ الـ snapshot بدون إشعارات لتجنب إشعارات قديمة
             set_followup2_snapshot(current_map)
             return
 
         for cid, data in current_map.items():
-            if snapshot.get(cid, "other") != "followup_2" and data["status"] == "followup_2":
+            prev_status = snapshot.get(cid, "other")
+            # نضيف إشعار فقط لو الحالة تغيرت فعلاً لـ followup_2 (transition جديد)
+            if prev_status != "followup_2" and data["status"] == "followup_2":
                 add_notification(cid, data["type"], "جاهز للمتابعة 2")
 
         set_followup2_snapshot(current_map)
@@ -408,7 +501,7 @@ def get_riyadh_followup1_snapshot():
 def check_riyadh_followup1_notifications():
     try:
         snapshot       = get_riyadh_followup1_snapshot()
-        responded_rows = responded_sheet.get_all_values()
+        responded_rows = get_sheet_values(responded_sheet)
         if len(responded_rows) <= 1:
             return
         try:
@@ -450,11 +543,13 @@ def check_riyadh_followup1_notifications():
             return
 
         if snapshot is None:
+            # أول مرة: نحفظ الـ snapshot بدون إشعارات لتجنب إشعارات قديمة
             set_riyadh_followup1_snapshot(current_map)
             return
 
         for cid, data in current_map.items():
-            if snapshot.get(cid, "other") != "riyadh_followup_1" and data["status"] == "riyadh_followup_1":
+            prev_status = snapshot.get(cid, "other")
+            if prev_status != "riyadh_followup_1" and data["status"] == "riyadh_followup_1":
                 add_notification(cid, data["type"], "جاهز للمتابعة 1 - مندوب الرياض")
 
         set_riyadh_followup1_snapshot(current_map)
@@ -489,13 +584,10 @@ def render_notifications_sidebar():
 
         col_a, col_b = st.columns(2)
         if col_a.button("✅ تعليم الكل مقروء", key="mark_all_other_btn", use_container_width=True):
-            for n in other_notifs:
-                if n["is_read"] == "unread":
-                    mark_single_read(n["notif_id"])
+            mark_all_read_batch(other_notifs)
             st.rerun()
         if col_b.button("🗑️ مسح الكل", key="clear_all_other_btn", use_container_width=True):
-            for n in other_notifs:
-                delete_single_notification(n["notif_id"])
+            delete_notifications_batch(other_notifs)
             st.rerun()
 
         st.markdown("---")
@@ -546,13 +638,10 @@ def render_notifications_sidebar():
 
         col_c, col_d = st.columns(2)
         if col_c.button("✅ تعليم الكل مقروء", key="mark_all_wh_btn", use_container_width=True):
-            for n in warehouse_notifs:
-                if n["is_read"] == "unread":
-                    mark_single_read(n["notif_id"])
+            mark_all_read_batch(warehouse_notifs)
             st.rerun()
         if col_d.button("🗑️ مسح الكل", key="clear_all_wh_btn", use_container_width=True):
-            for n in warehouse_notifs:
-                delete_single_notification(n["notif_id"])
+            delete_notifications_batch(warehouse_notifs)
             st.rerun()
 
         st.markdown("---")
@@ -602,13 +691,10 @@ def render_notifications_sidebar():
 
         col_e, col_f = st.columns(2)
         if col_e.button("✅ تعليم الكل مقروء", key="mark_all_riyadh_btn", use_container_width=True):
-            for n in riyadh_notifs:
-                if n["is_read"] == "unread":
-                    mark_single_read(n["notif_id"])
+            mark_all_read_batch(riyadh_notifs)
             st.rerun()
         if col_f.button("🗑️ مسح الكل", key="clear_all_riyadh_btn", use_container_width=True):
-            for n in riyadh_notifs:
-                delete_single_notification(n["notif_id"])
+            delete_notifications_batch(riyadh_notifs)
             st.rerun()
 
         st.markdown("---")
@@ -743,11 +829,14 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
                 submitted_move = col4.form_submit_button("⬅️ رجوع للنشطة")
 
             if submitted_save:
-                safe_update(sheet, f"B{i}", [[new_type]])
-                safe_update(sheet, f"C{i}", [[new_notes]])
-                safe_update(sheet, f"D{i}", [[new_action]])
-                safe_update(sheet, f"G{i}", [[new_outbound]])
-                safe_update(sheet, f"H{i}", [[new_inbound]])
+                # batch update بدل 5 calls منفصلين
+                safe_batch_update(sheet, [
+                    {"range": f"B{i}", "values": [[new_type]]},
+                    {"range": f"C{i}", "values": [[new_notes]]},
+                    {"range": f"D{i}", "values": [[new_action]]},
+                    {"range": f"G{i}", "values": [[new_outbound]]},
+                    {"range": f"H{i}", "values": [[new_inbound]]},
+                ])
                 add_notification(comp_id, new_type, "حفظ شكوى")
                 st.success("✅ تم التعديل")
 
@@ -788,7 +877,7 @@ if search_id.strip():
         (archive_sheet,    False, True)
     ]:
         try:
-            data = sheet_obj.get_all_values()
+            data = get_sheet_values(sheet_obj)
         except Exception:
             data = []
         for i, row in (enumerate(data[1:], start=2) if data else []):
@@ -861,7 +950,7 @@ with st.form("add_complaint", clear_on_submit=True):
 
 # ====== الشكاوى النشطة ======
 st.header("📋 الشكاوى النشطة:")
-active_notes = complaints_sheet.get_all_values()
+active_notes = get_sheet_values(complaints_sheet)
 if len(active_notes) > 1:
     for i, row in enumerate(active_notes[1:], start=2):
         render_complaint(complaints_sheet, i, row)
@@ -870,7 +959,7 @@ else:
 
 # ====== الإجراءات المردودة ======
 st.header("✅ الإجراءات المردودة حسب النوع:")
-responded_notes = responded_sheet.get_all_values()
+responded_notes = get_sheet_values(responded_sheet)
 if len(responded_notes) > 1:
     types_in_responded = list({row[1] for row in responded_notes[1:] if len(row) > 1})
     for complaint_type in types_in_responded:
@@ -932,7 +1021,7 @@ with st.form("add_aramex", clear_on_submit=True):
             st.error("⚠️ لازم تدخل رقم الطلب + الحالة + الإجراء")
 
 st.subheader("📋 قائمة الطلبات المعلقة")
-aramex_pending = aramex_sheet.get_all_values()
+aramex_pending = get_sheet_values(aramex_sheet)
 if len(aramex_pending) > 1:
     for i, row in enumerate(aramex_pending[1:], start=2):
         while len(row) < 4:
@@ -953,8 +1042,10 @@ if len(aramex_pending) > 1:
                 s_delete  = col2.form_submit_button("🗑️ حذف")
                 s_archive = col3.form_submit_button("📦 أرشفة")
                 if s_save:
-                    if safe_update(aramex_sheet, f"B{i}", [[new_status]]) and \
-                       safe_update(aramex_sheet, f"D{i}", [[new_action]]):
+                    if safe_batch_update(aramex_sheet, [
+                        {"range": f"B{i}", "values": [[new_status]]},
+                        {"range": f"D{i}", "values": [[new_action]]},
+                    ]):
                         add_notification(order_id_r, "معلق أرامكس", "تعديل معلق أرامكس")
                         st.success("✅ تم تعديل الطلب")
                 if s_delete:
@@ -972,7 +1063,7 @@ else:
 # ====== أرشيف أرامكس ======
 st.markdown("---")
 st.header("📦 أرشيف أرامكس:")
-aramex_archived = aramex_archive.get_all_values()
+aramex_archived = get_sheet_values(aramex_archive)
 if len(aramex_archived) > 1:
     for i, row in enumerate(aramex_archived[1:], start=2):
         while len(row) < 4:
@@ -999,9 +1090,16 @@ else:
     st.info("لا توجد شكاوى أرامكس مؤرشفة.")
 
 # ====== تشغيل المراقبة في آخر الصفحة ======
-if "followup_checked" not in st.session_state:
+# نستخدم مفتاح مبني على تاريخ اليوم بدل مجرد True
+# هذا يضمن إعادة الفحص مرة واحدة يومياً فقط بدل كل refresh
+_today_key = f"followup_checked_{datetime.now().strftime('%Y-%m-%d')}"
+if _today_key not in st.session_state:
+    # نمسح مفاتيح الأيام القديمة
+    for k in list(st.session_state.keys()):
+        if k.startswith("followup_checked_") and k != _today_key:
+            del st.session_state[k]
     check_followup2_notifications()
     check_riyadh_followup1_notifications()
-    st.session_state["followup_checked"] = True
+    st.session_state[_today_key] = True
 
 st.caption("الإشعارات تظهر في الشريط الجانبي عند فتح الموقع.")
