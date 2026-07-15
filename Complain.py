@@ -777,7 +777,7 @@ def get_order_status(order_id):
     return "⏳ تحت المتابعة"
 
 # ====== دالة عرض الشكوى ======
-def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
+def render_complaint(sheet, i, row, in_responded=False, in_archive=False, use_expander=True):
     while len(row) < 8:
         row.append("")
 
@@ -788,7 +788,15 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False):
 
     order_status = get_order_status(comp_id)
 
-    with st.expander(f"🆔 {comp_id} | 📌 {comp_type} | 📅 {date_added} {restored} | {order_status}"):
+    label = f"🆔 {comp_id} | 📌 {comp_type} | 📅 {date_added} {restored} | {order_status}"
+
+    if use_expander:
+        block = st.expander(label)
+    else:
+        st.markdown(f"**{label}**")
+        block = st.container(border=True)
+
+    with block:
         with st.form(key=f"form_{comp_id}_{sheet.title}_{i}"):
             st.write(f"📌 النوع الحالي: {comp_type}")
             st.write(f"📝 الملاحظات: {notes}")
@@ -963,8 +971,7 @@ responded_notes = get_sheet_values(responded_sheet)
 if len(responded_notes) > 1:
     types_in_responded = list({row[1] for row in responded_notes[1:] if len(row) > 1})
     for complaint_type in types_in_responded:
-        st.subheader(f"📌 نوع الشكوى: {complaint_type}")
-        with st.container(border=True):
+        with st.expander(f"📌 نوع الشكوى: {complaint_type}"):
             type_rows  = [(i, row) for i, row in enumerate(responded_notes[1:], start=2) if row[1] == complaint_type]
             followup_1 = []
             followup_2 = []
@@ -988,17 +995,20 @@ if len(responded_notes) > 1:
                     others.append((i, row))
 
             if followup_1:
-                st.markdown("**📋 جاهز للمتابعة 1**")
+                st.markdown("---")
+                st.markdown("#### 📋 جاهز للمتابعة 1")
                 for i, row in followup_1:
-                    render_complaint(responded_sheet, i, row, in_responded=True)
+                    render_complaint(responded_sheet, i, row, in_responded=True, use_expander=False)
             if followup_2:
-                st.markdown("**📋 جاهز للمتابعة 2**")
+                st.markdown("---")
+                st.markdown("#### 📋 جاهز للمتابعة 2")
                 for i, row in followup_2:
-                    render_complaint(responded_sheet, i, row, in_responded=True)
+                    render_complaint(responded_sheet, i, row, in_responded=True, use_expander=False)
             if others:
-                st.markdown("**📋 غير جاهز للمتابعة**")
+                st.markdown("---")
+                st.markdown("#### 📋 غير جاهز للمتابعة")
                 for i, row in others:
-                    render_complaint(responded_sheet, i, row, in_responded=True)
+                    render_complaint(responded_sheet, i, row, in_responded=True, use_expander=False)
 else:
     st.info("لا توجد شكاوى مردودة حالياً.")
 
