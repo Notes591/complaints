@@ -372,7 +372,6 @@ def cached_aramex_status(awb):
     if not awb or str(awb).strip() == "":
         return ""
     result = get_aramex_status(awb)
-    st.session_state[f"aramex_cache_{awb}"] = result
     return result
 
 
@@ -432,8 +431,7 @@ def check_followup2_notifications():
             for awb in [outbound_awb, inbound_awb]:
                 if not awb:
                     continue
-                cache_key = f"aramex_cache_{awb}"
-                status = st.session_state.get(cache_key) or cached_aramex_status(awb)
+                status = cached_aramex_status(awb)
                 if status:
                     s = status.lower()
                     if "delivered" in s or "تم التسليم" in s:
@@ -528,8 +526,7 @@ def check_riyadh_followup1_notifications():
             for awb in [outbound_awb, inbound_awb]:
                 if not awb:
                     continue
-                cache_key = f"aramex_cache_{awb}"
-                status = st.session_state.get(cache_key) or cached_aramex_status(awb)
+                status = cached_aramex_status(awb)
                 if status:
                     s = status.lower()
                     if "delivered" in s or "تم التسليم" in s:
