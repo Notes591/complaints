@@ -9,6 +9,9 @@ import requests
 import xml.etree.ElementTree as ET
 import re
 
+# ====== إعدادات الصفحة (يجب أن تكون أول أمر Streamlit في السكربت) ======
+st.set_page_config(page_title="📢 نظام الشكاوى", page_icon="⚠️", layout="wide")
+
 # ====== الاتصال بجوجل شيت ======
 scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
 
@@ -54,9 +57,6 @@ return_warehouse_sheet = sheets_dict["ReturnWarehouse"]
 order_number_sheet     = sheets_dict["Order Number"]
 notifications_sheet    = sheets_dict["Notifications"]
 snapshots_sheet        = sheets_dict["Snapshots"]
-
-# ====== إعدادات الصفحة ======
-st.set_page_config(page_title="📢 نظام الشكاوى", page_icon="⚠️", layout="wide")
 
 # ====== أنواع شكاوى مندوب الرياض ======
 RIYADH_DELEGATE_PREFIXES = (
