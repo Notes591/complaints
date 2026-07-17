@@ -11,9 +11,6 @@ import re
 
 # ====== الاتصال بجوجل شيت ======
 scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-creds_dict = st.secrets["gcp_service_account"]
-creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-client = gspread.authorize(creds)
 
 # ====== أوراق جوجل شيت ======
 SHEET_NAME = "Complaints"
@@ -24,19 +21,28 @@ sheet_titles = [
     "Snapshots"
 ]
 
-sheets_dict = {}
-ss = client.open(SHEET_NAME)
+@st.cache_resource
+def get_sheets():
+    """يتصل بجوجل شيت مرة وحدة فقط لكل التطبيق (مش كل تشغيلة/كل مستخدم)."""
+    creds_dict = st.secrets["gcp_service_account"]
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+    client = gspread.authorize(creds)
+    ss = client.open(SHEET_NAME)
 
-for title in sheet_titles:
-    try:
-        sheets_dict[title] = ss.worksheet(title)
-    except Exception:
+    sheets = {}
+    for title in sheet_titles:
         try:
-            ss = client.open(SHEET_NAME)
-            sheets_dict[title] = ss.add_worksheet(title=title, rows="1000", cols="26")
-        except Exception as e2:
-            st.error(f"خطأ في الوصول/إنشاء ورقة: {title} - {e2}")
-            raise
+            sheets[title] = ss.worksheet(title)
+        except Exception:
+            try:
+                ss2 = client.open(SHEET_NAME)
+                sheets[title] = ss2.add_worksheet(title=title, rows="1000", cols="26")
+            except Exception as e2:
+                st.error(f"خطأ في الوصول/إنشاء ورقة: {title} - {e2}")
+                raise
+    return sheets
+
+sheets_dict = get_sheets()
 
 complaints_sheet       = sheets_dict["Complaints"]
 responded_sheet        = sheets_dict["Responded"]
@@ -819,10 +825,12 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False, use_ex
             new_outbound = st.text_input("✏️ Outbound AWB", value=outbound_awb)
             new_inbound  = st.text_input("✏️ Inbound AWB", value=inbound_awb)
 
-            if new_outbound:
-                st.info(f"🚚 Outbound AWB: {new_outbound} | الحالة: {cached_aramex_status(new_outbound)}")
-            if new_inbound:
-                st.info(f"📦 Inbound AWB: {new_inbound} | الحالة: {cached_aramex_status(new_inbound)}")
+            check_status = st.form_submit_button("🔍 تحقق من حالة الشحنة (أرامكس)")
+            if check_status:
+                if new_outbound:
+                    st.info(f"🚚 Outbound AWB: {new_outbound} | الحالة: {cached_aramex_status(new_outbound)}")
+                if new_inbound:
+                    st.info(f"📦 Inbound AWB: {new_inbound} | الحالة: {cached_aramex_status(new_inbound)}")
 
             col1, col2, col3, col4 = st.columns(4)
             submitted_save    = col1.form_submit_button("💾 حفظ")
