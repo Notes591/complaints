@@ -70,9 +70,20 @@ snapshots_sheet        = sheets_dict["Snapshots"]
 # ====== رفع المرفقات (صور/فيديو) على جوجل درايف ======
 @st.cache_resource
 def get_drive_service():
-    """يتصل بجوجل درايف مرة وحدة فقط لكل التطبيق (نفس حساب الـ service account)."""
-    creds_dict = st.secrets["gcp_service_account"]
-    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+    """يتصل بجوجل درايف باستخدام حساب المستخدم الشخصي (OAuth) بدل الـ service account،
+    عشان الرفع يستخدم مساحة التخزين الشخصية (لأن الـ service account مالوش مساحة تخزين)."""
+    from google.oauth2.credentials import Credentials as UserCredentials
+    from google.auth.transport.requests import Request as GoogleAuthRequest
+
+    creds = UserCredentials(
+        token=None,
+        refresh_token=st.secrets["gdrive_refresh_token"],
+        client_id=st.secrets["gdrive_client_id"],
+        client_secret=st.secrets["gdrive_client_secret"],
+        token_uri="https://oauth2.googleapis.com/token",
+        scopes=["https://www.googleapis.com/auth/drive"],
+    )
+    creds.refresh(GoogleAuthRequest())
     return build("drive", "v3", credentials=creds)
 
 def upload_attachment(uploaded_file):
@@ -86,13 +97,18 @@ def upload_attachment(uploaded_file):
         if DRIVE_FOLDER_ID:
             file_metadata["parents"] = [DRIVE_FOLDER_ID]
         created = service.files().create(
-            body=file_metadata, media_body=media, fields="id, webViewLink"
+            body=file_metadata,
+            media_body=media,
+            fields="id, webViewLink",
+            supportsAllDrives=True,
         ).execute()
         file_id = created.get("id")
         try:
             # نخلي أي حد معاه الرابط يقدر يشوف الملف
             service.permissions().create(
-                fileId=file_id, body={"role": "reader", "type": "anyone"}
+                fileId=file_id,
+                body={"role": "reader", "type": "anyone"},
+                supportsAllDrives=True,
             ).execute()
         except Exception:
             pass
