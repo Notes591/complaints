@@ -8,21 +8,12 @@ import gspread.exceptions
 import requests
 import xml.etree.ElementTree as ET
 import re
-import io
-import mimetypes
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload
 
 # ====== إعدادات الصفحة (يجب أن تكون أول أمر Streamlit في السكربت) ======
 st.set_page_config(page_title="📢 نظام الشكاوى", page_icon="⚠️", layout="wide")
 
 # ====== الاتصال بجوجل شيت ======
 scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-
-# ====== إعداد جوجل درايف (لرفع مرفقات الصور/الفيديو) ======
-# لازم تعمل فولدر في جوجل درايف وتشاركه بإيميل الـ service account (نفس اللي بتستخدمه للشيت)
-# وتحط الـ ID بتاعه في secrets.toml تحت اسم drive_folder_id
-DRIVE_FOLDER_ID = st.secrets.get("drive_folder_id", "")
 
 # ====== أوراق جوجل شيت ======
 SHEET_NAME = "Complaints"
@@ -66,108 +57,6 @@ return_warehouse_sheet = sheets_dict["ReturnWarehouse"]
 order_number_sheet     = sheets_dict["Order Number"]
 notifications_sheet    = sheets_dict["Notifications"]
 snapshots_sheet        = sheets_dict["Snapshots"]
-
-# ====== رفع المرفقات (صور/فيديو) على جوجل درايف ======
-@st.cache_resource
-def get_drive_service():
-    """يتصل بجوجل درايف باستخدام حساب المستخدم الشخصي (OAuth) بدل الـ service account،
-    عشان الرفع يستخدم مساحة التخزين الشخصية (لأن الـ service account مالوش مساحة تخزين)."""
-    from google.oauth2.credentials import Credentials as UserCredentials
-    from google.auth.transport.requests import Request as GoogleAuthRequest
-
-    creds = UserCredentials(
-        token=None,
-        refresh_token=st.secrets["gdrive_refresh_token"],
-        client_id=st.secrets["gdrive_client_id"],
-        client_secret=st.secrets["gdrive_client_secret"],
-        token_uri="https://oauth2.googleapis.com/token",
-        scopes=["https://www.googleapis.com/auth/drive"],
-    )
-    creds.refresh(GoogleAuthRequest())
-    return build("drive", "v3", credentials=creds)
-
-def upload_attachment(uploaded_file):
-    """يرفع ملف واحد لجوجل درايف ويرجع (اسم الملف, رابط المشاهدة) أو None لو فشل."""
-    try:
-        service = get_drive_service()
-        file_bytes = uploaded_file.getvalue()
-        mime_type = uploaded_file.type or mimetypes.guess_type(uploaded_file.name)[0] or "application/octet-stream"
-        media = MediaIoBaseUpload(io.BytesIO(file_bytes), mimetype=mime_type, resumable=False)
-        file_metadata = {"name": uploaded_file.name}
-        if DRIVE_FOLDER_ID:
-            file_metadata["parents"] = [DRIVE_FOLDER_ID]
-        created = service.files().create(
-            body=file_metadata,
-            media_body=media,
-            fields="id, webViewLink",
-            supportsAllDrives=True,
-        ).execute()
-        file_id = created.get("id")
-        try:
-            # نخلي أي حد معاه الرابط يقدر يشوف الملف
-            service.permissions().create(
-                fileId=file_id,
-                body={"role": "reader", "type": "anyone"},
-                supportsAllDrives=True,
-            ).execute()
-        except Exception:
-            pass
-        link = created.get("webViewLink") or f"https://drive.google.com/file/d/{file_id}/view"
-        return uploaded_file.name, link
-    except Exception as e:
-        st.error(f"❌ فشل رفع الملف {uploaded_file.name}: {e}")
-        return None
-
-def upload_attachments_list(uploaded_files):
-    """يرفع أكتر من ملف ويرجع نص جاهز للتخزين في خلية واحدة بالشيت."""
-    if not uploaded_files:
-        return ""
-    entries = []
-    for f in uploaded_files:
-        result = upload_attachment(f)
-        if result:
-            name, link = result
-            entries.append(f"{name}::{link}")
-    return "|||".join(entries)
-
-def merge_attachments(existing_str, new_str):
-    """يدمج نص مرفقات قديم مع نص مرفقات جديد."""
-    parts = [p.strip() for p in [existing_str or "", new_str or ""] if p and p.strip()]
-    return "|||".join(parts)
-
-def parse_attachments(attach_str):
-    """يحول نص المرفقات المخزن لقائمة (اسم, رابط)."""
-    if not attach_str:
-        return []
-    result = []
-    for entry in attach_str.split("|||"):
-        entry = entry.strip()
-        if not entry:
-            continue
-        if "::" in entry:
-            name, link = entry.split("::", 1)
-        else:
-            name, link = "مرفق", entry
-        result.append((name, link))
-    return result
-
-def render_attachments(attach_str):
-    """يعرض روابط المرفقات (صور/فيديو) الحالية للشكوى."""
-    items = parse_attachments(attach_str)
-    if not items:
-        return
-    st.write("📎 المرفقات الحالية:")
-    for name, link in items:
-        lower = name.lower()
-        if lower.endswith((".mp4", ".mov", ".avi", ".mkv", ".webm")):
-            icon = "🎥"
-        elif lower.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp")):
-            icon = "🖼️"
-        else:
-            icon = "📄"
-        st.markdown(f"{icon} [{name}]({link})")
-
-ATTACHMENT_TYPES = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "mp4", "mov", "avi", "mkv", "webm"]
 
 # ====== أنواع شكاوى مندوب الرياض ======
 RIYADH_DELEGATE_PREFIXES = (
@@ -892,14 +781,13 @@ def get_order_status(order_id):
 
 # ====== دالة عرض الشكوى ======
 def render_complaint(sheet, i, row, in_responded=False, in_archive=False, use_expander=True):
-    while len(row) < 9:
+    while len(row) < 8:
         row.append("")
 
     comp_id, comp_type, notes, action, date_added = row[:5]
     restored     = row[5] if len(row) > 5 else ""
     outbound_awb = row[6] if len(row) > 6 else ""
     inbound_awb  = row[7] if len(row) > 7 else ""
-    attachments  = row[8] if len(row) > 8 else ""
 
     order_status = get_order_status(comp_id)
 
@@ -937,14 +825,6 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False, use_ex
             new_outbound = st.text_input("✏️ Outbound AWB", value=outbound_awb)
             new_inbound  = st.text_input("✏️ Inbound AWB", value=inbound_awb)
 
-            render_attachments(attachments)
-            new_media = st.file_uploader(
-                "📎 إرفاق صور أو فيديو جديدة",
-                type=ATTACHMENT_TYPES,
-                accept_multiple_files=True,
-                key=f"media_{comp_id}_{sheet.title}_{i}"
-            )
-
             check_status = st.form_submit_button("🔍 تحقق من حالة الشحنة (أرامكس)")
             if check_status:
                 if new_outbound:
@@ -961,11 +841,6 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False, use_ex
             else:
                 submitted_move = col4.form_submit_button("⬅️ رجوع للنشطة")
 
-            new_attachments_str = ""
-            if (submitted_save or submitted_archive or submitted_move) and new_media:
-                new_attachments_str = upload_attachments_list(new_media)
-            combined_attachments = merge_attachments(attachments, new_attachments_str)
-
             if submitted_save:
                 # batch update بدل 5 calls منفصلين
                 safe_batch_update(sheet, [
@@ -974,7 +849,6 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False, use_ex
                     {"range": f"D{i}", "values": [[new_action]]},
                     {"range": f"G{i}", "values": [[new_outbound]]},
                     {"range": f"H{i}", "values": [[new_inbound]]},
-                    {"range": f"I{i}", "values": [[combined_attachments]]},
                 ])
                 add_notification(comp_id, new_type, "حفظ شكوى")
                 st.success("✅ تم التعديل")
@@ -985,19 +859,19 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False, use_ex
                     st.warning("🗑️ تم حذف الشكوى")
 
             if submitted_archive:
-                if safe_append(archive_sheet, [comp_id, new_type, new_notes, new_action, date_added, restored, new_outbound, new_inbound, combined_attachments]):
+                if safe_append(archive_sheet, [comp_id, new_type, new_notes, new_action, date_added, restored, new_outbound, new_inbound]):
                     if safe_delete(sheet, i):
                         add_notification(comp_id, new_type, "أرشفة شكوى")
                         st.success("♻️ الشكوى انتقلت للأرشيف")
 
             if submitted_move:
                 if not in_responded:
-                    if safe_append(responded_sheet, [comp_id, new_type, new_notes, new_action, date_added, restored, new_outbound, new_inbound, combined_attachments]):
+                    if safe_append(responded_sheet, [comp_id, new_type, new_notes, new_action, date_added, restored, new_outbound, new_inbound]):
                         if safe_delete(sheet, i):
                             add_notification(comp_id, new_type, "نقل للمردودة")
                             st.success("✅ انتقلت للإجراءات المردودة")
                 else:
-                    if safe_append(complaints_sheet, [comp_id, new_type, new_notes, new_action, date_added, restored, new_outbound, new_inbound, combined_attachments]):
+                    if safe_append(complaints_sheet, [comp_id, new_type, new_notes, new_action, date_added, restored, new_outbound, new_inbound]):
                         if safe_delete(sheet, i):
                             add_notification(comp_id, new_type, "رجوع للنشطة")
                             st.success("✅ انتقلت للنشطة")
@@ -1039,17 +913,10 @@ with st.form("add_complaint", clear_on_submit=True):
     action       = st.text_area("✅ الإجراء المتخذ")
     outbound_awb = st.text_input("✏️ Outbound AWB")
     inbound_awb  = st.text_input("✏️ Inbound AWB")
-    new_media    = st.file_uploader(
-        "📎 إرفاق صور أو فيديو (اختياري)",
-        type=ATTACHMENT_TYPES,
-        accept_multiple_files=True,
-        key="new_complaint_media"
-    )
     submitted    = st.form_submit_button("➕ إضافة")
 
     if submitted:
         if comp_id.strip() and comp_type != "اختر نوع الشكوى...":
-            attachments_str = upload_attachments_list(new_media) if new_media else ""
             try:
                 complaints = complaints_sheet.get_all_records()
             except Exception:
@@ -1074,23 +941,22 @@ with st.form("add_complaint", clear_on_submit=True):
             elif cid in all_archive_ids:
                 for idx, row in enumerate(archive_sheet.get_all_values()[1:], start=2):
                     if clean_id(row[0]) == cid:
-                        r_notes       = row[2] if len(row) > 2 else ""
-                        r_action      = row[3] if len(row) > 3 else ""
-                        r_type        = row[1] if len(row) > 1 else ""
-                        r_outbound    = row[6] if len(row) > 6 else ""
-                        r_inbound     = row[7] if len(row) > 7 else ""
-                        r_attachments = row[8] if len(row) > 8 else ""
-                        if safe_append(complaints_sheet, [comp_id, r_type, r_notes, r_action, date_now, "🔄 مسترجعة", r_outbound, r_inbound, r_attachments]):
+                        r_notes    = row[2] if len(row) > 2 else ""
+                        r_action   = row[3] if len(row) > 3 else ""
+                        r_type     = row[1] if len(row) > 1 else ""
+                        r_outbound = row[6] if len(row) > 6 else ""
+                        r_inbound  = row[7] if len(row) > 7 else ""
+                        if safe_append(complaints_sheet, [comp_id, r_type, r_notes, r_action, date_now, "🔄 مسترجعة", r_outbound, r_inbound]):
                             if safe_delete(archive_sheet, idx):
                                 add_notification(comp_id, r_type, "رجوع للنشطة")
                                 st.success("✅ الشكوى كانت في الأرشيف وتمت إعادتها للنشطة")
                         break
             else:
                 if action.strip():
-                    if safe_append(responded_sheet, [comp_id, comp_type, notes, action, date_now, "", outbound_awb, inbound_awb, attachments_str]):
+                    if safe_append(responded_sheet, [comp_id, comp_type, notes, action, date_now, "", outbound_awb, inbound_awb]):
                         st.success("✅ تم تسجيل الشكوى في المردودة")
                 else:
-                    if safe_append(complaints_sheet, [comp_id, comp_type, notes, "", date_now, "", outbound_awb, inbound_awb, attachments_str]):
+                    if safe_append(complaints_sheet, [comp_id, comp_type, notes, "", date_now, "", outbound_awb, inbound_awb]):
                         st.success("✅ تم تسجيل الشكوى في النشطة")
         else:
             st.error("⚠️ لازم تدخل رقم الشكوى وتختار نوع صحيح")
