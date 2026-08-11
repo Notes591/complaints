@@ -182,6 +182,12 @@ def is_riyadh_type(comp_type):
     t = str(comp_type).strip()
     return any(t.startswith(prefix) for prefix in RIYADH_DELEGATE_PREFIXES)
 
+# ====== نوع شكاوى طلب رقم الحساب والآيبان ======
+IBAN_TYPE = "طلب رقم الحساب والايبان"
+
+def is_iban_type(comp_type):
+    return str(comp_type).strip() == IBAN_TYPE
+
 # ====== كاش البيانات في session_state لتقليل API calls ======
 def _sheet_cache_key(sheet):
     return f"_sheet_cache_{sheet.title}"
@@ -1027,6 +1033,23 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False, use_ex
 
 # ====== العنوان الرئيسي ======
 st.title("⚠️ نظام إدارة الشكاوى")
+
+# ====== أرقام الطلبات: طلب رقم الحساب والآيبان (زي إشعار أعلى الصفحة) ======
+iban_orders = []
+for sheet_obj in (complaints_sheet, responded_sheet):
+    try:
+        iban_data = get_sheet_values(sheet_obj)
+    except Exception:
+        iban_data = []
+    for row in iban_data[1:]:
+        if len(row) > 1 and is_iban_type(row[1]):
+            iban_cid = row[0] if len(row) > 0 else ""
+            if iban_cid:
+                iban_orders.append(iban_cid)
+
+if iban_orders:
+    iban_ids_str = "، ".join(iban_orders)
+    st.warning(f"🏦 طلبات رقم الحساب والآيبان ({len(iban_orders)}): {iban_ids_str}")
 
 # ====== البحث ======
 st.header("🔍 البحث عن شكوى")
