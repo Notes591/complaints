@@ -1184,6 +1184,55 @@ if len(responded_notes) > 1:
 else:
     st.info("لا توجد شكاوى مردودة حالياً.")
 
+# ====== تابات سريعة: جاهز للمتابعة 2 + مندوب الرياض جاهز للمتابعة ======
+# (نفس الشكاوى بتاعة "جاهز للمتابعة 2" و"مندوب الرياض" اللي بيتبعتها إشعار،
+#  بس هنا بنعرض الشكوى نفسها كاملة عشان تقدر تراجعها بسرعة، وبتفضل موجودة
+#  في مكانها الأصلي جوه "الإجراءات المردودة" برضه)
+st.markdown("---")
+st.header("⚡ تابات المتابعة السريعة")
+
+followup2_all = []
+riyadh_all    = []
+
+if len(responded_notes) > 1:
+    try:
+        rw_ids_quick = {clean_id(v) for v in return_warehouse_sheet.col_values(1)[1:] if clean_id(v)}
+    except Exception:
+        rw_ids_quick = set()
+
+    for i, row in enumerate(responded_notes[1:], start=2):
+        cid          = row[0] if len(row) > 0 else ""
+        comp_type_r  = row[1] if len(row) > 1 else ""
+        outbound_awb = row[6] if len(row) > 6 else ""
+        inbound_awb  = row[7] if len(row) > 7 else ""
+        delivered    = False
+        for awb in [outbound_awb, inbound_awb]:
+            if awb and "Delivered" in cached_aramex_status(awb):
+                delivered = True
+                break
+        in_rw = clean_id(cid) in rw_ids_quick
+
+        if delivered and in_rw:
+            followup2_all.append((i, row))
+        if is_riyadh_type(comp_type_r) and in_rw and not delivered:
+            riyadh_all.append((i, row))
+
+tab_followup2, tab_riyadh = st.tabs(["🏭 جاهز للمتابعة 2", "🚴 مندوب الرياض - جاهز للمتابعة"])
+
+with tab_followup2:
+    if followup2_all:
+        for i, row in followup2_all:
+            render_complaint(responded_sheet, i, row, in_responded=True, use_expander=True)
+    else:
+        st.info("لا توجد شكاوى جاهزة للمتابعة 2 حالياً.")
+
+with tab_riyadh:
+    if riyadh_all:
+        for i, row in riyadh_all:
+            render_complaint(responded_sheet, i, row, in_responded=True, use_expander=True)
+    else:
+        st.info("لا توجد شكاوى مندوب الرياض جاهزة للمتابعة حالياً.")
+
 # ====== معلق أرامكس ======
 st.markdown("---")
 st.header("🚚 معلق ارامكس")
