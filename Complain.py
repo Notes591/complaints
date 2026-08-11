@@ -972,7 +972,7 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False, use_ex
                 "📎 إرفاق صور أو فيديو جديدة",
                 type=ATTACHMENT_TYPES,
                 accept_multiple_files=True,
-                key=f"media_{comp_id}_{sheet.title}_{i}"
+                key=f"media_{comp_id}_{sheet.title}_{i}_{in_responded}_{in_archive}_{_render_complaint_counter['n']}"
             )
 
             col1, col2, col3, col4 = st.columns(4)
