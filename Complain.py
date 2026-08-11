@@ -8,10 +8,6 @@ import gspread.exceptions
 import requests
 import xml.etree.ElementTree as ET
 import re
-import io
-import mimetypes
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ====== إعدادات الصفحة (يجب أن تكون أول أمر Streamlit في السكربت) ======
@@ -19,11 +15,6 @@ st.set_page_config(page_title="📢 نظام الشكاوى", page_icon="⚠️"
 
 # ====== الاتصال بجوجل شيت ======
 scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-
-# ====== إعداد جوجل درايف (لرفع مرفقات الصور/الفيديو) ======
-# لازم تعمل فولدر في جوجل درايف وتشاركه بإيميل الـ service account (نفس اللي بتستخدمه للشيت)
-# وتحط الـ ID بتاعه في secrets.toml تحت اسم drive_folder_id
-DRIVE_FOLDER_ID = st.secrets.get("drive_folder_id", "")
 
 # ====== أوراق جوجل شيت ======
 SHEET_NAME = "Complaints"
@@ -67,108 +58,6 @@ return_warehouse_sheet = sheets_dict["ReturnWarehouse"]
 order_number_sheet     = sheets_dict["Order Number"]
 notifications_sheet    = sheets_dict["Notifications"]
 snapshots_sheet        = sheets_dict["Snapshots"]
-
-# ====== رفع المرفقات (صور/فيديو) على جوجل درايف ======
-@st.cache_resource
-def get_drive_service():
-    """يتصل بجوجل درايف باستخدام حساب المستخدم الشخصي (OAuth) بدل الـ service account،
-    عشان الرفع يستخدم مساحة التخزين الشخصية (لأن الـ service account مالوش مساحة تخزين)."""
-    from google.oauth2.credentials import Credentials as UserCredentials
-    from google.auth.transport.requests import Request as GoogleAuthRequest
-
-    creds = UserCredentials(
-        token=None,
-        refresh_token=st.secrets["gdrive_refresh_token"],
-        client_id=st.secrets["gdrive_client_id"],
-        client_secret=st.secrets["gdrive_client_secret"],
-        token_uri="https://oauth2.googleapis.com/token",
-        scopes=["https://www.googleapis.com/auth/drive"],
-    )
-    creds.refresh(GoogleAuthRequest())
-    return build("drive", "v3", credentials=creds)
-
-def upload_attachment(uploaded_file):
-    """يرفع ملف واحد لجوجل درايف ويرجع (اسم الملف, رابط المشاهدة) أو None لو فشل."""
-    try:
-        service = get_drive_service()
-        file_bytes = uploaded_file.getvalue()
-        mime_type = uploaded_file.type or mimetypes.guess_type(uploaded_file.name)[0] or "application/octet-stream"
-        media = MediaIoBaseUpload(io.BytesIO(file_bytes), mimetype=mime_type, resumable=False)
-        file_metadata = {"name": uploaded_file.name}
-        if DRIVE_FOLDER_ID:
-            file_metadata["parents"] = [DRIVE_FOLDER_ID]
-        created = service.files().create(
-            body=file_metadata,
-            media_body=media,
-            fields="id, webViewLink",
-            supportsAllDrives=True,
-        ).execute()
-        file_id = created.get("id")
-        try:
-            # نخلي أي حد معاه الرابط يقدر يشوف الملف
-            service.permissions().create(
-                fileId=file_id,
-                body={"role": "reader", "type": "anyone"},
-                supportsAllDrives=True,
-            ).execute()
-        except Exception:
-            pass
-        link = created.get("webViewLink") or f"https://drive.google.com/file/d/{file_id}/view"
-        return uploaded_file.name, link
-    except Exception as e:
-        st.error(f"❌ فشل رفع الملف {uploaded_file.name}: {e}")
-        return None
-
-def upload_attachments_list(uploaded_files):
-    """يرفع أكتر من ملف ويرجع نص جاهز للتخزين في خلية واحدة بالشيت."""
-    if not uploaded_files:
-        return ""
-    entries = []
-    for f in uploaded_files:
-        result = upload_attachment(f)
-        if result:
-            name, link = result
-            entries.append(f"{name}::{link}")
-    return "|||".join(entries)
-
-def merge_attachments(existing_str, new_str):
-    """يدمج نص مرفقات قديم مع نص مرفقات جديد."""
-    parts = [p.strip() for p in [existing_str or "", new_str or ""] if p and p.strip()]
-    return "|||".join(parts)
-
-def parse_attachments(attach_str):
-    """يحول نص المرفقات المخزن لقائمة (اسم, رابط)."""
-    if not attach_str:
-        return []
-    result = []
-    for entry in attach_str.split("|||"):
-        entry = entry.strip()
-        if not entry:
-            continue
-        if "::" in entry:
-            name, link = entry.split("::", 1)
-        else:
-            name, link = "مرفق", entry
-        result.append((name, link))
-    return result
-
-def render_attachments(attach_str):
-    """يعرض روابط المرفقات (صور/فيديو) الحالية للشكوى."""
-    items = parse_attachments(attach_str)
-    if not items:
-        return
-    st.write("📎 المرفقات الحالية:")
-    for name, link in items:
-        lower = name.lower()
-        if lower.endswith((".mp4", ".mov", ".avi", ".mkv", ".webm")):
-            icon = "🎥"
-        elif lower.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp")):
-            icon = "🖼️"
-        else:
-            icon = "📄"
-        st.markdown(f"{icon} [{name}]({link})")
-
-ATTACHMENT_TYPES = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "mp4", "mov", "avi", "mkv", "webm"]
 
 # ====== أنواع شكاوى مندوب الرياض ======
 RIYADH_DELEGATE_PREFIXES = (
@@ -973,14 +862,6 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False, use_ex
             if inbound_awb:
                 st.caption(f"📦 الحالة: {cached_aramex_status(inbound_awb)}")
 
-            render_attachments(attachments)
-            new_media = st.file_uploader(
-                "📎 إرفاق صور أو فيديو جديدة",
-                type=ATTACHMENT_TYPES,
-                accept_multiple_files=True,
-                key=f"media_{comp_id}_{sheet.title}_{i}_{in_responded}_{in_archive}_{_render_complaint_counter['n']}"
-            )
-
             col1, col2, col3, col4 = st.columns(4)
             submitted_save    = col1.form_submit_button("💾 حفظ")
             submitted_delete  = col2.form_submit_button("🗑️ حذف")
@@ -990,10 +871,7 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False, use_ex
             else:
                 submitted_move = col4.form_submit_button("⬅️ رجوع للنشطة")
 
-            new_attachments_str = ""
-            if (submitted_save or submitted_archive or submitted_move) and new_media:
-                new_attachments_str = upload_attachments_list(new_media)
-            combined_attachments = merge_attachments(attachments, new_attachments_str)
+            combined_attachments = attachments
 
             if submitted_save:
                 # batch update بدل 5 calls منفصلين
@@ -1085,17 +963,11 @@ with st.form("add_complaint", clear_on_submit=True):
     action       = st.text_area("✅ الإجراء المتخذ")
     outbound_awb = st.text_input("✏️ Outbound AWB")
     inbound_awb  = st.text_input("✏️ Inbound AWB")
-    new_media    = st.file_uploader(
-        "📎 إرفاق صور أو فيديو (اختياري)",
-        type=ATTACHMENT_TYPES,
-        accept_multiple_files=True,
-        key="new_complaint_media"
-    )
     submitted    = st.form_submit_button("➕ إضافة")
 
     if submitted:
         if comp_id.strip() and comp_type != "اختر نوع الشكوى...":
-            attachments_str = upload_attachments_list(new_media) if new_media else ""
+            attachments_str = ""
             try:
                 complaints = complaints_sheet.get_all_records()
             except Exception:
