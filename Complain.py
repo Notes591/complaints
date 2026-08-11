@@ -12,6 +12,7 @@ import io
 import mimetypes
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ====== إعدادات الصفحة (يجب أن تكون أول أمر Streamlit في السكربت) ======
 st.set_page_config(page_title="📢 نظام الشكاوى", page_icon="⚠️", layout="wide")
@@ -492,6 +493,24 @@ def cached_aramex_status(awb):
     return result
 
 
+def prefetch_aramex_statuses(awb_list):
+    """
+    يجيب حالة أرقام الشحن دي كلها بالتوازي (parallel) بدل ما يستناها واحد ورا التاني.
+    ده بيسرّع تحميل الصفحة كتير لأن كل request كان بياخد لحد 10-20 ثانية بمفرده.
+    النتائج بتتخزن في نفس كاش cached_aramex_status، فأي نداء ليها بعد كده بيبقى فوري.
+    """
+    unique_awbs = list({str(a).strip() for a in awb_list if a and str(a).strip()})
+    if not unique_awbs:
+        return
+    with ThreadPoolExecutor(max_workers=min(10, len(unique_awbs))) as executor:
+        futures = [executor.submit(cached_aramex_status, awb) for awb in unique_awbs]
+        for future in as_completed(futures):
+            try:
+                future.result()
+            except Exception:
+                pass
+
+
 # ====== مراقبة "جاهز للمتابعة 2" ======
 def set_followup2_snapshot(data):
     try:
@@ -891,6 +910,8 @@ def get_order_status(order_id):
     return "⏳ تحت المتابعة"
 
 # ====== دالة عرض الشكوى ======
+_render_complaint_counter = {"n": 0}
+
 def render_complaint(sheet, i, row, in_responded=False, in_archive=False, use_expander=True):
     while len(row) < 9:
         row.append("")
@@ -912,7 +933,11 @@ def render_complaint(sheet, i, row, in_responded=False, in_archive=False, use_ex
         block = st.container(border=True)
 
     with block:
-        with st.form(key=f"form_{comp_id}_{sheet.title}_{i}"):
+        # عداد لكل تشغيلة (run) يضمن إن الـ key يفضل فريد 100%، حتى لو نفس الـ ID/رقم
+        # الصف اتكرر بالغلط بين قسمين مختلفين (زي "جاهز للمتابعة 1" و"جاهز للمتابعة 2")
+        _render_complaint_counter["n"] += 1
+        form_key = f"form_{comp_id}_{sheet.title}_{i}_{in_responded}_{in_archive}_{_render_complaint_counter['n']}"
+        with st.form(key=form_key):
             st.write(f"📌 النوع الحالي: {comp_type}")
             st.write(f"📝 الملاحظات: {notes}")
             st.write(f"✅ الإجراء: {action}")
@@ -1097,6 +1122,11 @@ with st.form("add_complaint", clear_on_submit=True):
 st.header("📋 الشكاوى النشطة:")
 active_notes = get_sheet_values(complaints_sheet)
 if len(active_notes) > 1:
+    # نجمع كل أرقام الشحن ونجيب حالتها مرة واحدة بالتوازي بدل ما كل صف يستنى لوحده
+    prefetch_aramex_statuses(
+        [row[6] if len(row) > 6 else "" for row in active_notes[1:]] +
+        [row[7] if len(row) > 7 else "" for row in active_notes[1:]]
+    )
     for i, row in enumerate(active_notes[1:], start=2):
         render_complaint(complaints_sheet, i, row)
 else:
@@ -1106,6 +1136,11 @@ else:
 st.header("✅ الإجراءات المردودة حسب النوع:")
 responded_notes = get_sheet_values(responded_sheet)
 if len(responded_notes) > 1:
+    # نجيب حالة كل أرقام الشحن دفعة واحدة بالتوازي (مستخدمة في فحص "delivered" وفي الفورم نفسه)
+    prefetch_aramex_statuses(
+        [row[6] if len(row) > 6 else "" for row in responded_notes[1:]] +
+        [row[7] if len(row) > 7 else "" for row in responded_notes[1:]]
+    )
     types_in_responded = list({row[1] for row in responded_notes[1:] if len(row) > 1})
     for complaint_type in types_in_responded:
         with st.expander(f"📌 نوع الشكوى: {complaint_type}"):
